@@ -1,0 +1,25 @@
+.DS_Store
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+.env
+.env.*
+!.env.example
+
+.venv/
+venv/
+
+.claude/settings.local.json
+
+# 运行时产物（压缩存档、工具输出缓存、消息、任务）
+.rove/
+.team/
+.tasks/
+
+# IDE
+.idea/
+
+# Claude Code
+CLAUDE.md
