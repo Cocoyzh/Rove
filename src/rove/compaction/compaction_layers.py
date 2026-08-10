@@ -8,7 +8,9 @@ import json
 import time
 from pathlib import Path
 from rich.console import Console
-from rove.llm_client import client, MODEL
+from rove.llm_adapters import BaseLLMAdapter
+from rove.llm import LLMResponse, LLMRequest
+from rove.messages import Message
 from rove.paths import TOOL_RESULTS_DIR, TRANSCRIPT_DIR
 
 console = Console()
@@ -46,72 +48,48 @@ SUMMARY_PROMPT = """请总结以下对话，保留关键信息：
 
 
 # ---------------- L1 -------------------
-def _block_type(block):
-    if isinstance(block, dict):
-        return block.get("type")
-    return getattr(block, "type", None)
-
-def _has_tool_use(msg: dict) -> bool:
-    if msg.get("role") != "assistant":
-        return False
-    content = msg.get("content")
-    if not isinstance(content, list):
-        return False
-    for block in content:
-        if _block_type(block) == "tool_use":
-            return True
-    return False
-
-def _is_tool_result(msg: dict) -> bool:
-    if msg.get("role") != "user":
-        return False
-    content = msg.get("content")
-    if not isinstance(content, list):
-        return False
-    for block in content:
-        if _block_type(block) == "tool_result":
-            return True
-    return False
-
+def _has_tool_use(msg: Message) -> bool:
+    """assistant 消息是否带着工具调用请求"""
+    return msg.role == "assistant" and bool(msg.tool_calls)
 
 def snip_compact(messages: list) -> list:
-    if len(messages) <=MAX_MESSAGES:
+    if len(messages) <= MAX_MESSAGES:
         return messages
 
     head_end = KEEP_HEAD    # [0, head_end)
     tail_start = len(messages) - KEEP_TAIL  # [tail_start, end)
 
-    if head_end > 0 and _has_tool_use(messages[head_end-1]):
-        if head_end < len(messages) and _is_tool_result(messages[head_end]):
+    # head 边界：最后一格是 tool 结果或 assistant-with-tools 时，
+    # 向后扩展整串 tool，保证 [assistant, tool*] 完整进入 head，防止拆散配对
+    if head_end > 0 and (messages[head_end - 1].role == "tool"
+                         or _has_tool_use(messages[head_end - 1])):
+        while head_end < len(messages) and messages[head_end].role == "tool":
             head_end += 1
 
-    if (tail_start > 0 and _is_tool_result(messages[tail_start])
-        and _has_tool_use(messages[tail_start-1])):
-        tail_start -= 1
+    # tail 边界落在 tool 结果上 → 向前包含整串 tool 及其 assistant，防止拆散配对
+    if 0 < tail_start < len(messages) and messages[tail_start].role == "tool":
+        while tail_start > 0 and messages[tail_start - 1].role == "tool":
+            tail_start -= 1
+        if tail_start > 0 and _has_tool_use(messages[tail_start - 1]):
+            tail_start -= 1
 
     if head_end >= tail_start:
         return messages
 
     snipped_count = tail_start - head_end
-    placeholder = {"role": "user", "content": f"[已压缩 {snipped_count} 条消息]"}
+    placeholder = Message(role="user", content=f"[已压缩 {snipped_count} 条消息]")
 
     return messages[:head_end] + [placeholder] + messages[tail_start:]
 
 # ---------------- L2 -------------------
 def micro_compact(messages: list) -> list:
-    tool_results: list[tuple[int, int, dict]] = []
-    for msg_index, msg in enumerate(messages):
-        if not isinstance(msg.get("content"), list): continue
-        for block_index, block in enumerate(msg["content"]):
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                tool_results.append((msg_index, block_index, block))
-
-    if  len(tool_results) <= KEEP_RECENT:
+    tool_results = [msg for msg in messages if msg.role == "tool"]
+    if len(tool_results) <= KEEP_RECENT:
         return messages
 
-    for _, _, block in tool_results[:-KEEP_RECENT]:
-        if len(block.get("content", "")) > 120:
-            block["content"] = "[Earlier tool result compacted, Re-run if needed.]"
+    for msg in tool_results[:-KEEP_RECENT]:
+        if msg.content and len(msg.content) > 120:
+            msg.content = "[Earlier tool result compacted, Re-run if needed.]"
     return messages
 
 # ---------------- L3 -------------------
@@ -119,51 +97,49 @@ def tool_result_budget(messages: list, tool_results_dir: Path) -> list:
     if not messages:
         return messages
 
-    latest_msg = messages[-1]
-    if latest_msg.get("role") != "user" or not isinstance(latest_msg.get("content"), list):
+    # 最近一轮的结果 = 结尾连续的一串 tool 消息（并行调用可能不止一条）
+    tool_msgs: list[Message] = []
+    for msg in reversed(messages):
+        if msg.role != "tool":
+            break
+        tool_msgs.append(msg)
+    tool_msgs.reverse()
+
+    if not tool_msgs:
         return messages
 
-    blocks = []
-    for block in latest_msg["content"]:
-        if isinstance(block, dict) and block.get("type") == "tool_result":
-            blocks.append(block)
-
-    if not blocks:
-        return messages
-
-    total_size = sum(len(str(block.get("content", ""))) for block in blocks)
+    total_size = sum(len(msg.content or "") for msg in tool_msgs)
     if total_size <= TOOL_RESULT_BUDGET:
         return messages
 
-    reranked_blocks = sorted(blocks, key=lambda b: len(str(b.get("content", ""))), reverse=True)
-    for block in reranked_blocks:
+    reranked = sorted(tool_msgs, key=lambda m: len(m.content or ""), reverse=True)
+    for msg in reranked:
         if total_size <= TOOL_RESULT_BUDGET:
             break
-        content = str(block.get("content", ""))
+        content = msg.content or ""
         if len(content) <= PERSIST_THRESHOLD:
             continue
 
-        tool_use_id = block.get("tool_use_id", "unknown")
         tool_results_dir.mkdir(parents=True, exist_ok=True)
-        persist_path = tool_results_dir / f"{tool_use_id}.txt"
+        persist_path = tool_results_dir / f"{msg.tool_call_id}.txt"
         if not persist_path.exists():
             persist_path.write_text(content, encoding="utf-8")
 
-        block["content"] = (
+        msg.content = (
             f"<persisted-output>\n"
             f"Full output : {str(persist_path)}\n"
             f"Preview : {content[:PREVIEW_CHARS]}\n"
             f"</persisted-output>"
         )
 
-        total_size = sum(len(str(block.get("content", ""))) for block in blocks)
+        total_size = sum(len(m.content or "") for m in tool_msgs)
     return messages
 
 # ---------------- L4 -------------------
 
 def _estimate_size(messages: list) -> int:
     """估算消息列表的字符大小"""
-    return len(str(messages))
+    return len(json.dumps([m.to_dict() for m in messages], ensure_ascii=False))
 
 
 def _write_transcript(messages: list) -> Path:
@@ -172,59 +148,55 @@ def _write_transcript(messages: list) -> Path:
     path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
     with path.open("w", encoding="utf-8") as f:
         for msg in messages:
-            f.write(json.dumps(msg, default=str, ensure_ascii=False) + "\n")
+            f.write(json.dumps(msg.to_dict(), default=str, ensure_ascii=False) + "\n")
     return path
 
 
-def _summarize_history(messages: list) -> str:
+def _summarize_history(llm: BaseLLMAdapter, messages: list) -> str:
     """调 LLM 对对话历史做摘要，保留目标、发现、约束。"""
-    conversation = json.dumps(messages, default=str, ensure_ascii=False)[:80000]
+    conversation = json.dumps([m.to_dict() for m in messages],
+                              default=str, ensure_ascii=False)[:80000]
     prompt = SUMMARY_PROMPT.format(conversation=conversation)
 
-    response = client.messages.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=MAX_SUMMARY_TOKENS,
-    )
+    request = LLMRequest(messages=[Message(role="user", content=prompt)], tools=[],
+                         max_tokens=MAX_SUMMARY_TOKENS)
+    response: LLMResponse = llm.complete(request)
 
-    return "\n".join(
-        getattr(block, "text", "")
-        for block in response.content
-        if getattr(block, "type", None) == "text"
-    ).strip() or "(摘要为空)"
+    return response.content or "(摘要为空)"
 
 
-def compact_history(messages: list) -> list:
+def compact_history(llm: BaseLLMAdapter, messages: list) -> list:
     """L4: 前三层压不下去时，调 LLM 做全量摘要。
     存档 → 摘要 → 替换整个 messages。
     """
     transcript_path = _write_transcript(messages)
     console.print(f"[bold yellow]⚠ L4 压缩: 对话已存档[/bold yellow] [dim]{transcript_path}[/dim]")
 
-    summary = _summarize_history(messages)
+    summary = _summarize_history(llm, messages)
     console.print(f"[bold yellow]⚠ L4 压缩: 摘要完成[/bold yellow] [dim]{len(summary)} 字符[/dim]")
 
-    return [{"role": "user", "content": f"[对话已压缩]\n\n{summary}"}]
+    return [Message(role="user", content=f"[对话已压缩]\n\n{summary}")]
 
 
-def reactive_compact(messages: list) -> list:
+def reactive_compact(llm: BaseLLMAdapter, messages: list) -> list:
     """应急压缩：API 返回 prompt_too_long 时的最后手段。
     存档 → 摘要 → 只保留最近 5 条消息 + 摘要。
     """
     transcript_path = _write_transcript(messages)
     console.print(f"[bold yellow]⚠ 应急压缩: 对话已存档[/bold yellow] [dim]{transcript_path}[/dim]")
 
-    summary = _summarize_history(messages)
+    summary = _summarize_history(llm, messages)
 
-    # 保留最近 5 条消息，但不能拆散 tool_use/tool_result 配对
+    # 保留最近 5 条消息，但不能拆散 tool_calls/tool 结果配对
     tail_start = max(0, len(messages) - 5)
-    if (0 < tail_start < len(messages)
-            and _is_tool_result(messages[tail_start])
-            and _has_tool_use(messages[tail_start - 1])):
-        tail_start -= 1
+    if 0 < tail_start < len(messages) and messages[tail_start].role == "tool":
+        while tail_start > 0 and messages[tail_start - 1].role == "tool":
+            tail_start -= 1
+        if tail_start > 0 and _has_tool_use(messages[tail_start - 1]):
+            tail_start -= 1
 
     return [
-        {"role": "user", "content": f"[应急压缩]\n\n{summary}"},
+        Message(role="user", content=f"[应急压缩]\n\n{summary}"),
         *messages[tail_start:],
     ]
 
@@ -233,7 +205,7 @@ def reactive_compact(messages: list) -> list:
 MAX_REACTIVE_RETRIES = 1
 
 
-def run_pipeline(messages: list) -> list:
+def run_pipeline(llm: BaseLLMAdapter, messages: list) -> list:
     """压缩流水线入口：L3 → L1 → L2 → L4。
     在每轮 LLM 调用前调用，原地修改 messages。
     """
@@ -243,6 +215,6 @@ def run_pipeline(messages: list) -> list:
 
     if _estimate_size(messages) > CONTEXT_LIMIT:
         console.print("[bold yellow]⚠ 上下文超标，触发 L4 摘要[/bold yellow]")
-        messages[:] = compact_history(messages)
+        messages[:] = compact_history(llm, messages)
 
     return messages

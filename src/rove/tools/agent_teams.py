@@ -3,15 +3,17 @@ import time
 from pathlib import Path
 import threading
 from ..tool_registry import ToolRegistry, Tool
-from ..llm_client import client, MODEL
 from ..tools.file_tools import FILE_TOOLS
 from ..tools.protocol import build_protocol_tools
 from ..tools.message_bus import BUS, VALID_MSG_TYPES
 from rove.permissions import APPROVAL_MANAGER, PermissionPolicy
 from rove.paths import WORKSPACE_ROOT
+from rove.llm_adapters import BaseLLMAdapter
+from rove.llm import LLMResponse, LLMRequest
+from rove.messages import Message
 
 class TeammateManger:
-    def __init__(self, team_dir: Path, task_manager=None):
+    def __init__(self, team_dir: Path, task_manager=None, llm: BaseLLMAdapter = None):
         self.dir = team_dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.dir / "config.json"
@@ -19,6 +21,7 @@ class TeammateManger:
         self.threads = {}
         self._task_manager = task_manager
         self._tool_registries: dict[str, ToolRegistry] = {}
+        self._llm = llm
 
     def _load_config(self) -> dict:
         if self.config_path.exists():
@@ -41,12 +44,12 @@ class TeammateManger:
             self._save_config()
 
     @staticmethod
-    def _make_identity_block(name, role, team_name) -> dict:
-        return {
-            "role": "user",
-            "content": f"<identity> You are {name}, role: {role}, team:{team_name}."
-                       f"Continue your work.</identity>"
-        }
+    def _make_identity_block(name, role, team_name) -> Message:
+        return Message(
+            role="user",
+            content=f"<identity> You are {name}, role: {role}, team:{team_name}."
+                    f"Continue your work.</identity>"
+        )
 
     def spawn(self, name: str, role: str, prompt: str) -> str:
         member = self._find_member(name)
@@ -95,12 +98,7 @@ class TeammateManger:
             f"- Use send_message(to=\"lead\", ...) to report progress, ask questions, or signal completion.\n"
             f"- Read your inbox regularly — the lead may send you messages or protocol requests."
         )
-        messages = [
-            {
-                "role": 'user',
-                "content": prompt,
-            }
-        ]
+        messages: list[Message] = [Message(role="user", content=prompt)]
 
         POLL_INTERVAL = 5
         IDLE_TIMEOUT = 60
@@ -114,54 +112,34 @@ class TeammateManger:
             for _ in range(50):
                 inbox = BUS.read_inbox(name)
                 for msg in inbox:
-                    messages.append({
-                        "role": 'user',
-                        "content": json.dumps(msg)
-                    })
+                    messages.append(Message(role="user", content=json.dumps(msg)))
 
                 try:
-                    response = client.messages.create(
-                        messages=messages,
-                        model=MODEL,
-                        system=sys_prompt,
-                        tools=tools,
-                        max_tokens=8000
-                    )
+                    request = LLMRequest(messages=messages, tools=tools,
+                                         max_tokens=8000, system_prompt=sys_prompt)
+                    response: LLMResponse = self._llm.complete(request)
                 except Exception:
                     self._set_status(name, "idle")
                     return
 
-                messages.append({
-                    "role": 'assistant',
-                    "content": response.content
-                })
+                messages.append(Message(role="assistant",
+                                        content=response.content,
+                                        tool_calls=response.tool_calls))
 
                 if response.stop_reason != "tool_use":
                     break
 
-                results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        tool_name = block.name
-                        tool_args = block.input
+                for tc in response.tool_calls:
+                    try:
+                        output = self._exec(name, tc.tool_name, tc.tool_args)
+                        if tc.tool_name == "idle":
+                            idle_requested = True
+                    except Exception as e:
+                        output = f"Tool error: {e}"
 
-                        try:
-                            output = self._exec(name, tool_name, tool_args)
-                            if tool_name == "idle":
-                                idle_requested = True
-                        except Exception as e:
-                            output = f"Tool error: {e}"
-
-                        results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": str(output),
-                        })
-
-                messages.append({
-                    "role": "user",
-                    "content": results
-                })
+                    messages.append(Message(role="tool",
+                                            tool_call_id=tc.tool_id,
+                                            content=str(output)))
 
                 if idle_requested:
                     break
@@ -176,10 +154,7 @@ class TeammateManger:
                 inbox = BUS.read_inbox(name)
                 if inbox:
                     for msg in inbox:
-                        messages.append({
-                            "role": "user",
-                            "content": json.dumps(msg)
-                        })
+                        messages.append(Message(role="user", content=json.dumps(msg)))
                     resume = True
                     break
 
@@ -190,7 +165,7 @@ class TeammateManger:
             # 压缩后重新注入身份
             if len(messages) <= 3:
                 messages.insert(0, self._make_identity_block(name, role, team_name))
-                messages.insert(1, {"role": "assistant", "content": f"I am {name}. Continuing."})
+                messages.insert(1, Message(role="assistant", content=f"I am {name}. Continuing."))
 
     def _teammate_tools(self, name):
         return self._teammate_registry(name).get_schemas()

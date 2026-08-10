@@ -1,16 +1,8 @@
-import os
-from anthropic import Anthropic
-from dotenv import load_dotenv
 from rove.skill_loader import SkillLoader
 from rove.paths import SKILL_DIR
 
-load_dotenv()
-
-MODEL = os.getenv("MODEL_ID")
-client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 skill_loader = SkillLoader(SKILL_DIR)
-
-SYSTEM_PROMPT = f"""You are a Coding Agent. Your goal is to understand, modify, and verify code in a repository.
+SYSTEM_PROMPT = f"""You are Rove, an extensible coding agent harness. Your goal is to understand, modify, and verify code in a repository.
 
 Workflow:
 1. Plan — Use todo or task_create to break down multi-step work.
