@@ -52,7 +52,7 @@ def _has_tool_use(msg: Message) -> bool:
     """assistant 消息是否带着工具调用请求"""
     return msg.role == "assistant" and bool(msg.tool_calls)
 
-def snip_compact(messages: list) -> list:
+def snip_compact(messages: list[Message]) -> list[Message]:
     if len(messages) <= MAX_MESSAGES:
         return messages
 
@@ -79,21 +79,27 @@ def snip_compact(messages: list) -> list:
     snipped_count = tail_start - head_end
     placeholder = Message(role="user", content=f"[已压缩 {snipped_count} 条消息]")
 
+    console.print(f"[bold yellow]⚠ L1 snip: 压缩了 {snipped_count} 条消息[/bold yellow]")
     return messages[:head_end] + [placeholder] + messages[tail_start:]
 
 # ---------------- L2 -------------------
-def micro_compact(messages: list) -> list:
+def micro_compact(messages: list[Message]) -> list[Message]:
     tool_results = [msg for msg in messages if msg.role == "tool"]
     if len(tool_results) <= KEEP_RECENT:
         return messages
 
+    truncated = 0
     for msg in tool_results[:-KEEP_RECENT]:
         if msg.content and len(msg.content) > 120:
             msg.content = "[Earlier tool result compacted, Re-run if needed.]"
+            truncated += 1
+
+    if truncated:
+        console.print(f"[bold yellow]⚠ L2 micro: 截断了 {truncated} 条旧工具结果[/bold yellow]")
     return messages
 
 # ---------------- L3 -------------------
-def tool_result_budget(messages: list, tool_results_dir: Path) -> list:
+def tool_result_budget(messages: list[Message], tool_results_dir: Path) -> list[Message]:
     if not messages:
         return messages
 
@@ -113,6 +119,7 @@ def tool_result_budget(messages: list, tool_results_dir: Path) -> list:
         return messages
 
     reranked = sorted(tool_msgs, key=lambda m: len(m.content or ""), reverse=True)
+    persisted = 0
     for msg in reranked:
         if total_size <= TOOL_RESULT_BUDGET:
             break
@@ -131,18 +138,22 @@ def tool_result_budget(messages: list, tool_results_dir: Path) -> list:
             f"Preview : {content[:PREVIEW_CHARS]}\n"
             f"</persisted-output>"
         )
+        persisted += 1
 
         total_size = sum(len(m.content or "") for m in tool_msgs)
+
+    if persisted:
+        console.print(f"[bold yellow]⚠ L3 budget: 持久化了 {persisted} 个超大工具输出到 tool-results/[/bold yellow]")
     return messages
 
 # ---------------- L4 -------------------
 
-def _estimate_size(messages: list) -> int:
+def _estimate_size(messages: list[Message]) -> int:
     """估算消息列表的字符大小"""
     return len(json.dumps([m.to_dict() for m in messages], ensure_ascii=False))
 
 
-def _write_transcript(messages: list) -> Path:
+def _write_transcript(messages: list[Message]) -> Path:
     """压缩前将完整对话存档到磁盘，防止信息丢失。"""
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
@@ -152,7 +163,7 @@ def _write_transcript(messages: list) -> Path:
     return path
 
 
-def _summarize_history(llm: BaseLLMAdapter, messages: list) -> str:
+def _summarize_history(llm: BaseLLMAdapter, messages: list[Message]) -> str:
     """调 LLM 对对话历史做摘要，保留目标、发现、约束。"""
     conversation = json.dumps([m.to_dict() for m in messages],
                               default=str, ensure_ascii=False)[:80000]
@@ -165,7 +176,7 @@ def _summarize_history(llm: BaseLLMAdapter, messages: list) -> str:
     return response.content or "(摘要为空)"
 
 
-def compact_history(llm: BaseLLMAdapter, messages: list) -> list:
+def compact_history(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
     """L4: 前三层压不下去时，调 LLM 做全量摘要。
     存档 → 摘要 → 替换整个 messages。
     """
@@ -178,7 +189,7 @@ def compact_history(llm: BaseLLMAdapter, messages: list) -> list:
     return [Message(role="user", content=f"[对话已压缩]\n\n{summary}")]
 
 
-def reactive_compact(llm: BaseLLMAdapter, messages: list) -> list:
+def reactive_compact(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
     """应急压缩：API 返回 prompt_too_long 时的最后手段。
     存档 → 摘要 → 只保留最近 5 条消息 + 摘要。
     """
@@ -205,7 +216,7 @@ def reactive_compact(llm: BaseLLMAdapter, messages: list) -> list:
 MAX_REACTIVE_RETRIES = 1
 
 
-def run_pipeline(llm: BaseLLMAdapter, messages: list) -> list:
+def run_pipeline(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
     """压缩流水线入口：L3 → L1 → L2 → L4。
     在每轮 LLM 调用前调用，原地修改 messages。
     """

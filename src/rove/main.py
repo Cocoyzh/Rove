@@ -52,6 +52,9 @@ def main() -> None:
             lead.reset()
             console.print("[dim]✦ 新会话已开始，历史已清空[/dim]")
             continue
+        if query.strip() == "/compact":
+            lead.compact()
+            continue
         answer = lead.run(query)
 
         console.rule("[bold cyan]Answer[/bold cyan]", style="cyan")

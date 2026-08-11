@@ -1,90 +1,143 @@
 # Rove
 
-![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white) ![LLM: Anthropic](https://img.shields.io/badge/LLM-Anthropic-000000)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![LLM Anthropic](https://img.shields.io/badge/LLM-Anthropic-191919)
+![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-4C1)
 
-> 多智能体编码框架（Multi-Agent Coding Harness）· 跑在终端里的自治编码系统
+Rove 是一个运行在终端中的多智能体编码框架。它由 Lead Agent 负责任务规划、工具调用和结果验证，并可按需派生后台 Teammate 并行处理子任务。
 
-Rove 在终端里运行一个主智能体（Lead），通过工具编排规划、执行并验证编码任务；需要并行时，派生自治的 Teammate 到后台线程协作。工具调用经过权限门控，长对话由四层上下文压缩兜底。Python + Anthropic API 实现，数据落在本地文件，不依赖外部服务。
-
----
+项目内置权限门控、任务协作、异步消息和长上下文管理。任务状态与运行数据保存在本地文件系统中，无需额外部署数据库或消息队列。
 
 ## 核心特性
 
-### 🤝 多智能体协作
+### Agent 协作
 
-- Lead 通过 `spawn_teammate` 派发自治队友，每个队友在独立后台线程中跑自己的 LLM 循环
-- **任务看板**（`.tasks/`）：Lead 用 `task_create` 发布任务，队友 `scan_tasks` / `claim_task` **原子认领**（加锁防重复），完成后由 Lead `task_update` 标记完成
-- **消息总线**（`.team/inbox/`）：`send_message` / `read_inbox` 全异步通信，天然落盘、可排查
-- **协议系统**：`shutdown`、`plan_review` 等结构化请求需对方显式 approve / reject
-- 队友只持有受限工具集：能认领任务、读写文件、收发消息，但不能创建 / 完成任务
+- Lead Agent 负责任务拆分、工具编排和最终响应。
+- Teammate 在独立后台线程中运行，并使用受限工具集处理子任务。
+- 文件化任务看板支持任务创建、扫描、原子认领和状态更新。
+- 异步消息总线用于 Lead 与 Teammate 之间的持久化通信。
+- `shutdown`、`plan_review` 等结构化协议支持显式确认或拒绝。
 
-### 🛡️ 权限门控与安全
+### 工具与权限
 
-- 每次工具调用先过 `PermissionPolicy`，三级决策：**ALLOW**（只读类直接放行）/ **ASK**（需用户确认）/ **DENY**（直接拦截）
-- **破坏性命令硬拒**：`rm -rf /`、`sudo`、`shutdown`、`mkfs`、`dd` 等直接拦截
-- **路径逃逸防护**：文件读写被锁定在 workspace 内，`../` 越界即拒绝
-- 交互式审批：`y` 放行一次 / `s` 本次会话内同类操作免审批 / `N` 拒绝
+- 所有工具通过统一的 `ToolRegistry` 注册和执行。
+- `PermissionPolicy` 将操作划分为 `ALLOW`、`ASK` 和 `DENY`。
+- 高风险命令会被直接拒绝，敏感操作需要交互确认。
+- 文件读写限制在 workspace 范围内，防止路径逃逸。
+- 支持文件操作、后台命令、Python 执行、任务管理和 Skill 加载。
 
-### 📦 四层上下文压缩
+### 模型抽象
 
-对话上下文会随运行时间不断累积，最终触发 API 的 `prompt_too_long`。每次 LLM 调用前都会先跑四层压缩流水线（前 3 层零 API 调用）：
+- 使用统一的 `Message` 和 `ToolCall` 表示对话与工具调用。
+- `LLMRequest` / `LLMResponse` 隔离 Agent 运行时与供应商 SDK。
+- `BaseLLMAdapter` 定义模型后端接口，当前提供 `AnthropicLLMAdapter`。
+- Lead Agent、Teammate 和上下文管理器通过依赖注入共享模型后端。
 
-- **L3** 超大 tool 结果落盘到 `.rove/tool-results/`，仅保留预览
-- **L1** 中段消息裁剪（保持 tool_use / tool_result 配对完整）
-- **L2** 旧工具结果折叠为占位符
-- **L4** 全量对话存档后由 LLM 生成摘要
-- 压缩前完整对话存档到 `.rove/transcripts/`，不丢信息
-- 触发 `prompt_too_long` 时启用应急压缩并自动重试
+### 长会话支持
 
----
-
-## 技术栈
-
-Python ≥ 3.10 · Anthropic Messages API（Tool Use）· rich · 线程级并行（daemon thread）· 纯文件持久化
-
----
+- REPL 中的连续请求共享同一个 Lead Agent 会话。
+- 四层压缩流水线控制消息数量和工具输出体积。
+- 压缩前自动保存完整对话，必要时可追溯原始内容。
+- API 返回上下文溢出错误时，自动执行应急压缩并重试。
 
 ## 快速开始
 
+### 环境要求
+
+- Python 3.10 或更高版本
+- Anthropic API，或兼容 Anthropic Messages API 的服务
+
+### 安装
+
 ```bash
-# 1. 安装（可编辑模式）
+git clone https://github.com/Cocoyzh/Rove.git
+cd Rove
+
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
+```
 
-# 2. 配置环境变量（仓库根目录新建 .env）
-MODEL_ID=你的模型名
-ANTHROPIC_BASE_URL=兼容 Anthropic 接口的端点
+### 配置
 
-# 3. 启动 REPL
+在仓库根目录创建 `.env` 文件：
+
+```dotenv
+LLM_MODEL_ID=your-model-id
+LLM_API_KEY=your-api-key
+LLM_TIMEOUT=60
+```
+
+### 启动
+
+```bash
 rove
-
-# 4. 在 REPL 里
-#    > 帮我用二分查找修这个 bug，写完跑一下测试
-#    /team   查看当前队友
-#    q       退出
 ```
 
----
+## 使用说明
 
-## 目录结构
+启动后可直接输入编码任务：
 
+```text
+Rove >> 检查这个项目的配置加载逻辑，修复问题并验证结果
 ```
+
+REPL 内置命令：
+
+| 命令 | 说明 |
+| --- | --- |
+| `/team` | 查看当前 Teammate 状态 |
+| `/new` | 清空历史并开始新会话 |
+| `/compact` | 立即存档并摘要当前会话 |
+| `q`、`exit` 或空输入 | 退出 Rove |
+
+当工具调用需要审批时，可输入：
+
+| 输入 | 说明 |
+| --- | --- |
+| `y` | 仅允许本次操作 |
+| `s` | 当前会话内允许同类操作 |
+| `N` | 拒绝操作 |
+
+## 上下文管理
+
+Rove 在每轮模型调用前执行四层上下文压缩：
+
+| 层级 | 策略 | 行为 |
+| --- | --- | --- |
+| L3 | Tool Result Budget | 将超大工具输出保存到磁盘，仅保留路径和预览 |
+| L1 | Snip Compact | 裁剪中段消息，保持工具调用与结果配对完整 |
+| L2 | Micro Compact | 折叠较旧的工具结果，保留近期结果 |
+| L4 | Auto Compact | 存档完整对话，并调用模型生成摘要 |
+
+如果接口返回 `prompt_too_long` 或 `too many tokens`，Rove 会执行一次应急压缩，然后重试当前请求。手动执行 `/compact` 可提前归档并压缩当前会话。
+
+## 运行时数据
+
+Rove 使用以下本地目录保存运行状态：
+
+| 路径 | 内容 |
+| --- | --- |
+| `.tasks/` | 任务看板与任务状态 |
+| `.team/` | Teammate 状态与消息收件箱 |
+| `.rove/tool-results/` | 从上下文中移出的超大工具输出 |
+| `.rove/transcripts/` | 上下文摘要前的完整对话存档 |
+
+## 项目结构
+
+```text
 src/rove/
-├── main.py                    # REPL 入口：装配工具集、循环读输入
-├── agent_loop.py              # Lead 的 LLM 循环：注入收件箱/后台通知、执行工具调用
-├── tool_registry.py           # 工具注册中心 + 统一执行（先过权限判定）
-├── permissions.py             # ALLOW / ASK / DENY 三级权限门控
-├── llm_client.py              # Anthropic 客户端 + 系统提示词
-├── task_manager.py            # 任务看板：JSON 持久化，原子认领
-├── paths.py                   # 所有项目/运行时目录的唯一事实来源
-├── compaction/
-│   └── compaction_layers.py   # 四层上下文压缩流水线 + 应急压缩
-└── tools/
-    ├── agent_teams.py         # Teammate 派生、受限工具集、生命周期管理
-    ├── message_bus.py         # 文件消息总线（异步、落盘）
-    ├── protocol.py            # 结构化协议：shutdown / plan_review
-    ├── file_tools.py          # 文件读写工具
-    ├── background.py          # 后台 shell 任务
-    ├── task_tool.py           # 任务看板工具（task_create/update/scan/claim）
-    └── execute_python.py      # 执行 Python 代码
+├── main.py                    # REPL 入口与依赖装配
+├── lead_agent.py              # Lead Agent 会话与执行循环
+├── messages.py                # 统一消息与工具调用模型
+├── llm.py                     # 模型请求和响应结构
+├── llm_adapters.py            # 模型后端适配器
+├── prompt/                    # 系统提示词
+├── compaction/                # 上下文压缩流水线
+├── tools/                     # 内置工具与多智能体协作工具
+├── tool_registry.py           # 工具注册和权限执行入口
+├── permissions.py             # 权限策略与交互审批
+├── task_manager.py            # 文件化任务管理
+├── skill_loader.py            # Skill 加载器
+└── paths.py                   # 项目及运行时路径定义
 ```
-

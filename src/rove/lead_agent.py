@@ -3,7 +3,7 @@ from typing import List
 from rich.console import Console
 from rove.tool_registry import ToolRegistry
 from rove.prompt.system_prompt import SYSTEM_PROMPT
-from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES
+from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES, compact_history
 from rove.tools.message_bus import BUS
 from rove.tools.background import bg_manager
 from rove.llm import LLMResponse, LLMRequest
@@ -24,6 +24,12 @@ class LeadAgent:
     def reset(self) -> None:
         """清空对话历史，开始新会话。"""
         self.messages = []
+
+    def compact(self) -> None:
+        if not self.messages:
+            console.print("[dim]没有可压缩的对话[/dim]")
+            return
+        self.messages[:] = compact_history(self.llm, self.messages)
 
     def run(self, query: str) -> str:
         self.messages.append(Message(role="user", content=query))
