@@ -6,8 +6,7 @@ from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR
 from rove.permissions import APPROVAL_MANAGER
 from rove.tools.agent_teams import TeammateManger
 from rich.console import Console
-from rich.markdown import Markdown
-from rove.llm_adapters import AnthropicLLMAdapter
+from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
 import readline
 import os
 from dotenv import load_dotenv
@@ -23,14 +22,39 @@ console = Console()
 
 PROMPT = "\001\033[1;36m\002Rove >>\001\033[0m\002 "
 
+def show_context(lead: LeadAgent, llm: BaseLLMAdapter) -> None:
+    console.rule("[bold cyan]Context[/bold cyan]", style="cyan")
+    console.print(f"Context window  {llm.context_window:,} tokens")
+    used = llm.last_input_tokens
+    pct = used / llm.context_window * 100 if llm.context_window else 0
+    console.print(f"上次调用上下文  {used:,} tokens ({pct:.1f}%)")
+    console.print(f"消息数          {len(lead.messages)}")
+
+
+def show_status(lead: LeadAgent, llm: BaseLLMAdapter) -> None:
+    console.rule("[bold cyan]Status[/bold cyan]", style="cyan")
+    console.print(f"[cyan]Model[/cyan]           {llm.model}")
+    console.print(f"[cyan]Context window[/cyan]  {llm.context_window:,} tokens")
+    console.print("[cyan]Session[/cyan]")
+    console.print(f"  消息数          {len(lead.messages)}")
+    console.print(f"  消耗 In/Out     {lead.conv_input_tokens:,} / {lead.conv_output_tokens:,}")
+    console.print("[cyan]Global[/cyan]")
+    console.print(f"  调用次数        {llm.call_count}")
+    console.print(f"  消耗 In/Out     {llm.total_input_tokens:,} / {llm.total_output_tokens:,}")
+
+
 def main() -> None:
     skill_loader = SkillLoader(SKILL_DIR)
     task_manager = TaskManager(TASK_DIR)
 
-    llm = AnthropicLLMAdapter(model=os.getenv("LLM_MODEL_ID"),
-                              api_key=os.getenv("LLM_API_KEY"),
-                              base_url=os.getenv("LLM_BASE_URL"),
-                              timeout=int(os.getenv("LLM_TIMEOUT", "60")))
+    ctx_override = os.getenv("LLM_CONTEXT_WINDOW")
+    llm = AnthropicLLMAdapter(
+        model=os.getenv("LLM_MODEL_ID"),
+        api_key=os.getenv("LLM_API_KEY"),
+        base_url=os.getenv("LLM_BASE_URL"),
+        timeout=int(os.getenv("LLM_TIMEOUT", "60")),
+        context_window=int(ctx_override) if ctx_override else None,
+    )
 
     team_manager = TeammateManger(TEAM_DIR, task_manager, llm)
 
@@ -55,12 +79,14 @@ def main() -> None:
         if query.strip() == "/compact":
             lead.compact()
             continue
+        if query.strip() == "/status":
+            show_status(lead, llm)
+            continue
+        if query.strip() == "/context":
+            show_context(lead, llm)
+            continue
         answer = lead.run(query)
-
-        console.rule("[bold cyan]Answer[/bold cyan]", style="cyan")
-        if answer and answer.strip():
-            console.print(Markdown(answer))
-        else:
+        if not (answer and answer.strip()):
             console.print("[dim](empty response)[/dim]")
 
 if __name__ == "__main__":
