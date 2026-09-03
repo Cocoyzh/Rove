@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
+import { CollabPanel } from './components/CollabPanel';
+import { ApprovalCard } from './components/ApprovalCard';
 import { useRoveWebSocket } from './hooks/useRoveWebSocket';
 import { SessionSummary, SystemStatus } from './types/rove';
 
@@ -138,7 +140,7 @@ export default function App() {
 
       {/* 2. 中间主对话控制台 */}
       <ChatArea
-        sessionTitle={currentSession?.title || '未选择会话'}
+        sessionTitle={currentSession?.title || '新会话'}
         isConnected={isConnected}
         messages={messages}
         currentStreamingText={currentStreamingText}
@@ -149,9 +151,16 @@ export default function App() {
         onSendApproval={sendApproval}
         isCollabOpen={isCollabOpen}
         onToggleCollab={() => setIsCollabOpen((prev) => !prev)}
+        renderApprovalCard={(appr) => (
+          <ApprovalCard approval={appr} onRespond={sendApproval} />
+        )}
       />
 
-      {/* 3. 右侧栏：协同抽屉（在步骤 6 中填充 Task 看板与 Teammate 监控） */}
+      {/* 3. 右侧栏：Task 看板与 Teammates 协同监控 */}
+      <CollabPanel
+        isOpen={isCollabOpen}
+        onClose={() => setIsCollabOpen(false)}
+      />
     </div>
   );
 }
