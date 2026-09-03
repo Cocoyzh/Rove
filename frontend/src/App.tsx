@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
+import { ChatArea } from './components/ChatArea';
 import { useRoveWebSocket } from './hooks/useRoveWebSocket';
 import { SessionSummary, SystemStatus } from './types/rove';
 
@@ -8,7 +9,7 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isCollabCollapsed, setIsCollabCollapsed] = useState(false);
+  const [isCollabOpen, setIsCollabOpen] = useState(true);
 
   // 获取所有会话列表
   const fetchSessions = useCallback(async () => {
@@ -117,6 +118,8 @@ export default function App() {
     }
   };
 
+  const currentSession = sessions.find((s) => s.id === currentSessionId);
+
   return (
     <div className="flex h-screen w-screen bg-rove-bg text-rove-text overflow-hidden font-sans">
       {/* 1. 左侧栏：会话管理与系统状态 */}
@@ -134,29 +137,21 @@ export default function App() {
       />
 
       {/* 2. 中间主对话控制台 */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden bg-rove-bg border-r border-rove-border relative">
-        <header className="h-14 border-b border-rove-border px-6 flex items-center justify-between bg-rove-sidebar/40">
-          <div className="flex items-center space-x-3">
-            <span className="font-mono text-sm font-semibold text-rove-textBright">
-              {sessions.find((s) => s.id === currentSessionId)?.title || '未选择会话'}
-            </span>
-            <div className="flex items-center space-x-1.5 text-xs text-rove-textDim">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  isConnected ? 'bg-rove-green shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rove-red'
-                }`}
-              />
-              <span className="font-mono text-[11px]">{isConnected ? 'ONLINE' : 'OFFLINE'}</span>
-            </div>
-          </div>
-        </header>
+      <ChatArea
+        sessionTitle={currentSession?.title || '未选择会话'}
+        isConnected={isConnected}
+        messages={messages}
+        currentStreamingText={currentStreamingText}
+        activeToolSteps={activeToolSteps}
+        pendingApproval={pendingApproval}
+        isRunning={isRunning}
+        onSendMessage={sendMessage}
+        onSendApproval={sendApproval}
+        isCollabOpen={isCollabOpen}
+        onToggleCollab={() => setIsCollabOpen((prev) => !prev)}
+      />
 
-        <div className="flex-1 flex items-center justify-center p-6 text-rove-textDim text-sm">
-          {currentSessionId ? '主对话区与协同看板准备就绪' : '请在左侧新建或选择一个会话'}
-        </div>
-      </main>
-
-      {/* 3. 右侧栏：Task 与 Teammate 协同（占位） */}
+      {/* 3. 右侧栏：协同抽屉（在步骤 6 中填充 Task 看板与 Teammate 监控） */}
     </div>
   );
 }
