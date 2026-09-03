@@ -21,6 +21,7 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 rove = "rove.main:main"
+rove-web = "rove.web.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -15,6 +15,7 @@ from rove.llm_adapters import AnthropicLLMAdapter
 from rove.web.session_manager import SessionManager
 from rove.web.websocket_handler import websocket_endpoint
 from fastapi import WebSocket
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
@@ -131,6 +132,12 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/{session_id}")
     async def ws_route(websocket: WebSocket, session_id: str):
         await websocket_endpoint(websocket, session_id, app.state)
+
+    # ==================== 前端静态页面挂载 ====================
+
+    dist_dir = PROJECT_ROOT / "frontend" / "dist"
+    if dist_dir.exists():
+        app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
 
     return app
 

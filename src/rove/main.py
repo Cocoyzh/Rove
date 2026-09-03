@@ -43,7 +43,16 @@ def show_status(lead: LeadAgent, llm: BaseLLMAdapter) -> None:
     console.print(f"  消耗 In/Out     {llm.total_input_tokens:,} / {llm.total_output_tokens:,}")
 
 
+import sys
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "web":
+        from rove.web.server import main as web_main
+        sys.argv.pop(1)
+        web_main()
+        return
+
     skill_loader = SkillLoader(SKILL_DIR)
     task_manager = TaskManager(TASK_DIR)
 
