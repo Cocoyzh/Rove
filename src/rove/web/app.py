@@ -13,6 +13,8 @@ from rove.skill_loader import SkillLoader
 from rove.tools.agent_teams import TeammateManger
 from rove.llm_adapters import AnthropicLLMAdapter
 from rove.web.session_manager import SessionManager
+from rove.web.websocket_handler import websocket_endpoint
+from fastapi import WebSocket
 
 load_dotenv()
 
@@ -123,6 +125,12 @@ def create_app() -> FastAPI:
             "total_output_tokens": llm.total_output_tokens,
             "call_count": llm.call_count,
         }
+
+    # ==================== WebSocket 双向实时流 ====================
+
+    @app.websocket("/ws/{session_id}")
+    async def ws_route(websocket: WebSocket, session_id: str):
+        await websocket_endpoint(websocket, session_id, app.state)
 
     return app
 
