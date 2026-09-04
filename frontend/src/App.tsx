@@ -21,9 +21,7 @@ export default function App() {
         const data: SessionSummary[] = await res.json();
         setSessions(data);
         if (data.length > 0) {
-          if (!currentSessionId) {
-            setCurrentSessionId(data[0].id);
-          }
+          setCurrentSessionId((prev) => prev || data[0].id);
         } else {
           // 初始无会话时自动创建一个，保证开箱即连，避免 OFFLINE 假死
           const createRes = await fetch('/api/sessions', {
@@ -41,7 +39,7 @@ export default function App() {
     } catch (err) {
       console.error('Failed to fetch sessions:', err);
     }
-  }, [currentSessionId]);
+  }, []);
 
   // 获取系统状态
   const fetchStatus = useCallback(async () => {
@@ -63,6 +61,11 @@ export default function App() {
     return () => clearInterval(timer);
   }, [fetchSessions, fetchStatus]);
 
+  const handleSessionUpdated = useCallback(() => {
+    fetchSessions();
+    fetchStatus();
+  }, [fetchSessions, fetchStatus]);
+
   // WebSocket 实时连接管理
   const {
     isConnected,
@@ -76,10 +79,7 @@ export default function App() {
     sendCompact,
   } = useRoveWebSocket({
     sessionId: currentSessionId,
-    onSessionUpdated: () => {
-      fetchSessions();
-      fetchStatus();
-    },
+    onSessionUpdated: handleSessionUpdated,
   });
 
   // 创建新会话

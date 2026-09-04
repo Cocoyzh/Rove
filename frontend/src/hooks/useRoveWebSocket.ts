@@ -15,6 +15,10 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
   const [isRunning, setIsRunning] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const onSessionUpdatedRef = useRef(onSessionUpdated);
+  useEffect(() => {
+    onSessionUpdatedRef.current = onSessionUpdated;
+  }, [onSessionUpdated]);
 
   // 清空本轮临时的流式数据
   const resetStreamingState = useCallback(() => {
@@ -26,6 +30,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
 
   useEffect(() => {
     if (!sessionId) {
+      setIsConnected(false);
       setMessages([]);
       resetStreamingState();
       return;
@@ -36,10 +41,12 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     // 开发环境下 Vite proxy 会代理 /ws，生产环境下与后端同域
     const wsUrl = `${protocol}//${host}/ws/${sessionId}`;
 
+    let isCleanedUp = false;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (isCleanedUp) return;
       setIsConnected(true);
       resetStreamingState();
     };
@@ -115,8 +122,8 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'get_history' }));
             }
-            if (onSessionUpdated) {
-              onSessionUpdated();
+            if (onSessionUpdatedRef.current) {
+              onSessionUpdatedRef.current();
             }
             break;
 
@@ -124,8 +131,8 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'get_history' }));
             }
-            if (onSessionUpdated) {
-              onSessionUpdated();
+            if (onSessionUpdatedRef.current) {
+              onSessionUpdatedRef.current();
             }
             break;
 
@@ -138,21 +145,24 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     };
 
     ws.onclose = () => {
+      if (isCleanedUp) return;
       setIsConnected(false);
       setIsRunning(false);
     };
 
     ws.onerror = (err) => {
+      if (isCleanedUp) return;
       console.error('WebSocket error:', err);
       setIsConnected(false);
       setIsRunning(false);
     };
 
     return () => {
+      isCleanedUp = true;
       ws.close();
       wsRef.current = null;
     };
-  }, [sessionId, onSessionUpdated, resetStreamingState]);
+  }, [sessionId, resetStreamingState]);
 
   const sendMessage = useCallback((query: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
