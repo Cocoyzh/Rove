@@ -161,3 +161,22 @@ def test_websocket_history_handshake():
 
     # 清理会话
     client.delete(f"/api/sessions/{sid}")
+
+
+def test_dynamic_workspace_isolation(tmp_path):
+    external_dir = tmp_path / "competition_project"
+    external_dir.mkdir()
+    sample_file = external_dir / "solution.py"
+    sample_file.write_text("print('winner')", encoding="utf-8")
+
+    from rove.permissions import PermissionPolicy, PermissionDecision
+    policy = PermissionPolicy(workspace=external_dir)
+
+    # 1. 允许读取该外部比赛目录下的文件
+    dec, _ = policy.decide("read_file", {"path": "solution.py"})
+    assert dec == PermissionDecision.ALLOW
+
+    # 2. 严厉拦截越界逃逸到该项目外部的行为
+    dec_escape, reason = policy.decide("read_file", {"path": "../secret.txt"})
+    assert dec_escape == PermissionDecision.DENY
+    assert "escapes workspace" in reason
