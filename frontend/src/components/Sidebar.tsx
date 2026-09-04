@@ -226,14 +226,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[11px] text-slate-500">
-              <div className="flex items-center space-x-1">
-                <Activity size={12} />
-                <span>累计 Tokens</span>
+            {/* 本会话消耗与项目累计双层展示 (方案 A) */}
+            <div className="pt-1.5 border-t border-slate-100 space-y-1 text-[11px] text-slate-500">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-1">
+                  <Activity size={12} className="text-sky-600" />
+                  <span className="font-medium text-slate-600">本会话消耗</span>
+                </div>
+                <span className="font-mono text-slate-800 font-medium">
+                  {(systemStatus?.session_tokens || 0).toLocaleString()}
+                </span>
               </div>
-              <span className="font-mono text-slate-700">
-                {((systemStatus?.total_input_tokens || 0) + (systemStatus?.total_output_tokens || 0)).toLocaleString()}
-              </span>
+
+              <div className="flex items-center justify-between text-[10px] text-slate-400">
+                <span>项目总计开销</span>
+                <span className="font-mono text-slate-500">
+                  {((systemStatus?.project_total_tokens ?? (systemStatus?.total_input_tokens || 0) + (systemStatus?.total_output_tokens || 0))).toLocaleString()}
+                </span>
+              </div>
             </div>
 
             <button

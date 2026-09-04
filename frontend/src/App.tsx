@@ -34,10 +34,12 @@ export default function App() {
     }
   }, []);
 
-  // 获取系统状态
-  const fetchStatus = useCallback(async () => {
+  // 获取系统状态（传入 session_id 获取当前会话专属上下文与消耗）
+  const fetchStatus = useCallback(async (targetSessionId?: string | null) => {
     try {
-      const res = await fetch('/api/system/status');
+      const sid = targetSessionId !== undefined ? targetSessionId : currentSessionId;
+      const url = sid ? `/api/system/status?session_id=${encodeURIComponent(sid)}` : '/api/system/status';
+      const res = await fetch(url);
       if (res.ok) {
         const data: SystemStatus = await res.json();
         setSystemStatus(data);
@@ -45,19 +47,19 @@ export default function App() {
     } catch (err) {
       console.error('Failed to fetch system status:', err);
     }
-  }, []);
+  }, [currentSessionId]);
 
   useEffect(() => {
     fetchSessions();
-    fetchStatus();
-    const timer = setInterval(fetchStatus, 5000);
+    fetchStatus(currentSessionId);
+    const timer = setInterval(() => fetchStatus(), 5000);
     return () => clearInterval(timer);
-  }, [fetchSessions, fetchStatus]);
+  }, [fetchSessions, fetchStatus, currentSessionId]);
 
   const handleSessionUpdated = useCallback(() => {
     fetchSessions();
-    fetchStatus();
-  }, [fetchSessions, fetchStatus]);
+    fetchStatus(currentSessionId);
+  }, [fetchSessions, fetchStatus, currentSessionId]);
 
   // WebSocket 实时连接管理
   const {

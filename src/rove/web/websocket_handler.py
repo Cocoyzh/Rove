@@ -71,7 +71,13 @@ class SessionConnection:
             on_tool_end=self._on_tool_end,
         )
 
-        # 从 session_manager 恢复该会话的历史消息
+        # 从 session_manager 恢复该会话的历史消息与指标统计
+        saved_session = self.app_state.session_manager.get_session(session_id)
+        if saved_session:
+            self.agent.session_input_tokens = saved_session.get("total_input_tokens", 0)
+            self.agent.session_output_tokens = saved_session.get("total_output_tokens", 0)
+            self.agent.last_context_tokens = saved_session.get("last_context_tokens", 0)
+
         saved_messages = self.app_state.session_manager.load_session_messages(session_id)
         if saved_messages:
             self.agent.messages = saved_messages
@@ -149,9 +155,13 @@ class SessionConnection:
                     "error": str(e),
                 })
             finally:
-                # 保存会话消息
+                # 保存会话消息与 Token 指标
                 self.app_state.session_manager.save_session_messages(
-                    self.session_id, self.agent.messages
+                    self.session_id,
+                    self.agent.messages,
+                    input_tokens=self.agent.session_input_tokens,
+                    output_tokens=self.agent.session_output_tokens,
+                    last_context_tokens=self.agent.last_context_tokens,
                 )
                 self._send_json_threadsafe({
                     "type": "done",
@@ -167,7 +177,11 @@ class SessionConnection:
         def worker():
             self.agent.compact()
             self.app_state.session_manager.save_session_messages(
-                self.session_id, self.agent.messages
+                self.session_id,
+                self.agent.messages,
+                input_tokens=self.agent.session_input_tokens,
+                output_tokens=self.agent.session_output_tokens,
+                last_context_tokens=self.agent.last_context_tokens,
             )
             self._send_json_threadsafe({
                 "type": "compact_done",

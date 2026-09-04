@@ -37,6 +37,10 @@ export interface SessionSummary {
   created_at: number;
   updated_at: number;
   message_count: number;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  last_context_tokens?: number;
+  session_tokens?: number;
 }
 
 export interface TaskItem {
@@ -62,9 +66,12 @@ export interface TeamConfig {
 export interface SystemStatus {
   model: string;
   context_window: number;
-  last_input_tokens: number;
+  session_id?: string | null;
+  session_context_tokens?: number;
   context_used_pct: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  call_count: number;
+  session_tokens?: number;
+  project_total_tokens?: number;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  call_count?: number;
 }

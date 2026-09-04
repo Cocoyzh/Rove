@@ -57,12 +57,18 @@ class SessionManager:
             for file in self.dir.glob("*.json"):
                 try:
                     data = json.loads(file.read_text(encoding="utf-8"))
+                    in_tok = data.get("total_input_tokens", 0)
+                    out_tok = data.get("total_output_tokens", 0)
                     sessions.append({
                         "id": data.get("id", file.stem),
                         "title": data.get("title", "未命名会话"),
                         "created_at": data.get("created_at", 0),
                         "updated_at": data.get("updated_at", 0),
                         "message_count": len(data.get("messages", [])),
+                        "total_input_tokens": in_tok,
+                        "total_output_tokens": out_tok,
+                        "last_context_tokens": data.get("last_context_tokens", 0),
+                        "session_tokens": in_tok + out_tok,
                     })
                 except Exception:
                     continue
@@ -78,6 +84,9 @@ class SessionManager:
             "created_at": now,
             "updated_at": now,
             "messages": [],
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "last_context_tokens": 0,
         }
         path = self._file_path(session_id)
         with self._lock:
@@ -119,7 +128,15 @@ class SessionManager:
                     return False
             return False
 
-    def save_session_messages(self, session_id: str, messages: List[Message], auto_title: bool = True) -> bool:
+    def save_session_messages(
+        self,
+        session_id: str,
+        messages: List[Message],
+        auto_title: bool = True,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        last_context_tokens: Optional[int] = None,
+    ) -> bool:
         path = self._file_path(session_id)
         with self._lock:
             if not path.exists():
@@ -128,6 +145,12 @@ class SessionManager:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 data["messages"] = [message_to_dict(m) for m in messages]
                 data["updated_at"] = time.time()
+                if input_tokens is not None:
+                    data["total_input_tokens"] = input_tokens
+                if output_tokens is not None:
+                    data["total_output_tokens"] = output_tokens
+                if last_context_tokens is not None:
+                    data["last_context_tokens"] = last_context_tokens
 
                 # 如果还是初始标题且有用户消息，自动提取前20个字作为标题
                 if auto_title and (data.get("title") in ("新会话", "未命名会话")):

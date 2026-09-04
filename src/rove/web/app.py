@@ -123,14 +123,26 @@ def create_app() -> FastAPI:
     # ==================== 系统状态与指标 ====================
 
     @app.get("/api/system/status")
-    def get_system_status():
-        used = llm.last_input_tokens
-        pct = round(used / llm.context_window * 100, 2) if llm.context_window else 0
+    def get_system_status(session_id: Optional[str] = None):
+        session_ctx = 0
+        session_tokens = 0
+        if session_id:
+            s = session_manager.get_session(session_id)
+            if s:
+                session_ctx = s.get("last_context_tokens", 0)
+                session_tokens = s.get("total_input_tokens", 0) + s.get("total_output_tokens", 0)
+
+        pct = round(session_ctx / llm.context_window * 100, 2) if (llm.context_window and session_ctx) else 0.0
+        project_total = llm.total_input_tokens + llm.total_output_tokens
+
         return {
             "model": llm.model,
             "context_window": llm.context_window,
-            "last_input_tokens": used,
+            "session_id": session_id,
+            "session_context_tokens": session_ctx,
             "context_used_pct": pct,
+            "session_tokens": session_tokens,
+            "project_total_tokens": project_total,
             "total_input_tokens": llm.total_input_tokens,
             "total_output_tokens": llm.total_output_tokens,
             "call_count": llm.call_count,

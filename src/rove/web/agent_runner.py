@@ -38,6 +38,9 @@ class WebLeadAgent(LeadAgent):
         self.on_text_hook = on_text
         self.on_tool_start_hook = on_tool_start
         self.on_tool_end_hook = on_tool_end
+        self.session_input_tokens: int = 0
+        self.session_output_tokens: int = 0
+        self.last_context_tokens: int = 0
 
     def _stream_text(self, text: str) -> None:
         super()._stream_text(text)
@@ -83,6 +86,9 @@ class WebLeadAgent(LeadAgent):
                     if response.usage:
                         total_input_tokens += response.usage.input_tokens
                         total_output_tokens += response.usage.output_tokens
+                        self.session_input_tokens += response.usage.input_tokens
+                        self.session_output_tokens += response.usage.output_tokens
+                        self.last_context_tokens = response.usage.input_tokens
                     reactive_retries = 0
                 except Exception as e:
                     if (

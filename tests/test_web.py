@@ -135,11 +135,16 @@ def test_rest_api_endpoints():
     assert res_team.status_code == 200
     assert "members" in res_team.json()
 
-    # 4. 系统指标
-    res_status = client.get("/api/system/status")
+    # 4. 系统指标与会话级上下文/Token计量
+    res_status = client.get(f"/api/system/status?session_id={sid}")
     assert res_status.status_code == 200
-    assert "model" in res_status.json()
-    assert "context_window" in res_status.json()
+    status_json = res_status.json()
+    assert "model" in status_json
+    assert "context_window" in status_json
+    assert "session_tokens" in status_json
+    assert "project_total_tokens" in status_json
+    assert status_json["session_id"] == sid
+    assert status_json["context_used_pct"] == 0.0
 
     # 5. 清理会话
     res_del = client.delete(f"/api/sessions/{sid}")
