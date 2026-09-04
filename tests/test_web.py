@@ -163,6 +163,25 @@ def test_websocket_history_handshake():
     client.delete(f"/api/sessions/{sid}")
 
 
+def test_websocket_approval_loop():
+    client = TestClient(app)
+    res = client.post("/api/sessions", json={"title": "WS 审批循环测试"})
+    sid = res.json()["id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        data = ws.receive_json()
+        assert data["type"] == "history"
+
+        # 发送 approval_response，验证 WebSocket 接收循环正常工作不被阻塞
+        ws.send_json({
+            "type": "approval_response",
+            "approval_id": "test_appr_none",
+            "decision": "y"
+        })
+
+    client.delete(f"/api/sessions/{sid}")
+
+
 def test_dynamic_workspace_isolation(tmp_path):
     external_dir = tmp_path / "competition_project"
     external_dir.mkdir()

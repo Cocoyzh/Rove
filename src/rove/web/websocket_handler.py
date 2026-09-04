@@ -34,6 +34,11 @@ class SessionConnection:
         self.app_state = app_state
         self.loop = asyncio.get_running_loop()
 
+        # 异步输出队列，确保所有发往前端的 WebSocket 消息严格按序单协程发送，彻底杜绝并发冲突
+        self.send_queue: asyncio.Queue[str] = asyncio.Queue()
+        self.sender_task = asyncio.create_task(self._send_loop())
+        self._is_closed = False
+
         # 为该会话构建专属的 WebApprovalManager
         self.approval_mgr = WebApprovalManager(on_approval_needed=self._on_approval_needed)
 
@@ -71,8 +76,33 @@ class SessionConnection:
         if saved_messages:
             self.agent.messages = saved_messages
 
+    async def _send_loop(self) -> None:
+        try:
+            while not self._is_closed:
+                msg = await self.send_queue.get()
+                try:
+                    await self.ws.send_text(msg)
+                except Exception:
+                    break
+                finally:
+                    self.send_queue.task_done()
+        except asyncio.CancelledError:
+            pass
+
     def _send_json_threadsafe(self, payload: Dict[str, Any]) -> None:
-        asyncio.run_coroutine_threadsafe(self.ws.send_text(json.dumps(payload, ensure_ascii=False)), self.loop)
+        if self._is_closed:
+            return
+        msg = json.dumps(payload, ensure_ascii=False)
+        self.loop.call_soon_threadsafe(self.send_queue.put_nowait, msg)
+
+    def close(self) -> None:
+        self._is_closed = True
+        self.sender_task.cancel()
+        # 兜底释放所有被挂起的审批等待，避免死锁后台工作线程
+        with self.approval_mgr._lock:
+            for req in self.approval_mgr._pending_requests.values():
+                req["decision"] = "n"
+                req["event"].set()
 
     def _on_token(self, token: str) -> None:
         self._send_json_threadsafe({
@@ -147,10 +177,10 @@ class SessionConnection:
 
     async def send_history(self) -> None:
         msgs = [message_to_dict(m) for m in self.agent.messages]
-        await self.ws.send_text(json.dumps({
+        self._send_json_threadsafe({
             "type": "history",
             "messages": msgs,
-        }, ensure_ascii=False))
+        })
 
 
 async def websocket_endpoint(websocket: WebSocket, session_id: str, app_state: Any) -> None:
@@ -169,7 +199,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, app_state: A
             if msg_type == "chat":
                 query = data.get("query", "")
                 if query.strip():
-                    await conn.handle_chat(query)
+                    # 关键修复：以独立协程启动处理，切勿 await 阻塞接收循环！
+                    # 否则在等待用户审批时，receive_text 无法接收后续 approval_response 导致死锁挂起
+                    asyncio.create_task(conn.handle_chat(query))
             elif msg_type == "approval_response":
                 approval_id = data.get("approval_id")
                 decision = data.get("decision", "N")
@@ -183,3 +215,5 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, app_state: A
         pass
     except Exception as e:
         console.print(f"[yellow]WebSocket disconnected: {e}[/yellow]")
+    finally:
+        conn.close()
