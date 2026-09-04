@@ -20,8 +20,22 @@ export default function App() {
       if (res.ok) {
         const data: SessionSummary[] = await res.json();
         setSessions(data);
-        if (data.length > 0 && !currentSessionId) {
-          setCurrentSessionId(data[0].id);
+        if (data.length > 0) {
+          if (!currentSessionId) {
+            setCurrentSessionId(data[0].id);
+          }
+        } else {
+          // 初始无会话时自动创建一个，保证开箱即连，避免 OFFLINE 假死
+          const createRes = await fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: '新会话' }),
+          });
+          if (createRes.ok) {
+            const newSession = await createRes.json();
+            setSessions([newSession]);
+            setCurrentSessionId(newSession.id);
+          }
         }
       }
     } catch (err) {

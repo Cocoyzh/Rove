@@ -17,7 +17,7 @@ from rove.web.websocket_handler import websocket_endpoint
 from fastapi import WebSocket
 from fastapi.staticfiles import StaticFiles
 
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 class CreateSessionRequest(BaseModel):

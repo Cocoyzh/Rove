@@ -95,6 +95,17 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
             });
             break;
 
+          case 'error':
+            setIsRunning(false);
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: 'assistant',
+                content: `⚠️ **模型服务连接或执行异常**\n\n\`\`\`text\n${data.error || 'Unknown error'}\n\`\`\`\n\n> 💡 **排查建议**：\n> 1. 检查根目录下 \`.env\` 的 \`LLM_API_KEY\`、\`LLM_BASE_URL\`、\`LLM_MODEL_ID\`。\n> 2. 检查代理与网络是否能正常访问模型端点。`,
+              },
+            ]);
+            break;
+
           case 'done':
             setIsRunning(false);
             setCurrentStreamingText('');
