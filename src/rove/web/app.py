@@ -44,6 +44,9 @@ def create_app() -> FastAPI:
     task_manager = TaskManager(TASK_DIR)
     skill_loader = SkillLoader(SKILL_DIR)
     session_manager = SessionManager(SESSIONS_DIR)
+    # 确保至少存在一个默认初始会话，杜绝冷启动无会话导致 WebSocket 无法握手
+    if len(session_manager.list_sessions()) == 0:
+        session_manager.create_session("新会话")
 
     ctx_override = os.getenv("LLM_CONTEXT_WINDOW")
     llm = AnthropicLLMAdapter(
