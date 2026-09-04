@@ -106,11 +106,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/tasks")
     def get_tasks():
-        tasks_json = task_manager.list_all()
-        try:
-            return json.loads(tasks_json)
-        except Exception:
-            return []
+        return task_manager.get_all_tasks()
 
     @app.get("/api/team")
     def get_team():

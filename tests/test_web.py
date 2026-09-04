@@ -129,7 +129,12 @@ def test_rest_api_endpoints():
     # 3. 协同与任务看板
     res_tasks = client.get("/api/tasks")
     assert res_tasks.status_code == 200
-    assert isinstance(res_tasks.json(), list)
+    tasks_data = res_tasks.json()
+    assert isinstance(tasks_data, list)
+    if tasks_data:
+        assert "id" in tasks_data[0]
+        assert "subject" in tasks_data[0]
+        assert "status" in tasks_data[0]
 
     res_team = client.get("/api/team")
     assert res_team.status_code == 200
