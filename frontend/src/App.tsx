@@ -199,6 +199,7 @@ export default function App() {
       <CollabPanel
         isOpen={isCollabOpen}
         onClose={() => setIsCollabOpen(false)}
+        sessionId={currentSessionId}
       />
     </div>
   );

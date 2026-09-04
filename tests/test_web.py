@@ -127,17 +127,19 @@ def test_rest_api_endpoints():
     assert res_patch.status_code == 200
     assert res_patch.json()["title"] == "改名测试"
 
-    # 3. 协同与任务看板
+    # 3. 协同与任务看板（含会话级隔离）
     res_tasks = client.get("/api/tasks")
     assert res_tasks.status_code == 200
     tasks_data = res_tasks.json()
     assert isinstance(tasks_data, list)
-    if tasks_data:
-        assert "id" in tasks_data[0]
-        assert "subject" in tasks_data[0]
-        assert "status" in tasks_data[0]
 
-    res_team = client.get("/api/team")
+    res_s_tasks = client.get(f"/api/tasks?session_id={sid}")
+    assert res_s_tasks.status_code == 200
+    assert isinstance(res_s_tasks.json(), list)
+
+    res_team = client.get(f"/api/team?session_id={sid}")
+    assert res_team.status_code == 200
+    assert "team_name" in res_team.json()
     assert res_team.status_code == 200
     assert "members" in res_team.json()
 

@@ -7,9 +7,10 @@ import { TaskItem, TeamConfig } from '../types/rove';
 interface CollabPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  sessionId?: string | null;
 }
 
-export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose }) => {
+export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose, sessionId }) => {
   const [activeTab, setActiveTab] = useState<'tasks' | 'team'>('tasks');
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [team, setTeam] = useState<TeamConfig | null>(null);
@@ -18,9 +19,11 @@ export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose }) => 
   const fetchCollabData = useCallback(async () => {
     setIsLoading(true);
     try {
+      const tasksUrl = sessionId ? `/api/tasks?session_id=${encodeURIComponent(sessionId)}` : '/api/tasks';
+      const teamUrl = sessionId ? `/api/team?session_id=${encodeURIComponent(sessionId)}` : '/api/team';
       const [tasksRes, teamRes] = await Promise.all([
-        fetch('/api/tasks'),
-        fetch('/api/team'),
+        fetch(tasksUrl),
+        fetch(teamUrl),
       ]);
 
       if (tasksRes.ok) {
@@ -37,7 +40,7 @@ export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose }) => 
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [sessionId]);
 
   useEffect(() => {
     if (isOpen) {
@@ -45,7 +48,7 @@ export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose }) => 
       const timer = setInterval(fetchCollabData, 4000);
       return () => clearInterval(timer);
     }
-  }, [isOpen, fetchCollabData]);
+  }, [isOpen, fetchCollabData, sessionId]);
 
   return (
     <aside

@@ -91,16 +91,36 @@ def create_app() -> FastAPI:
         ok = session_manager.delete_session(session_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Session not found")
+        # 同步清理该会话绑定的 Task 看板目录和 Team 协同目录
+        import shutil
+        s_task_dir = TASK_DIR / session_id
+        if s_task_dir.exists():
+            shutil.rmtree(s_task_dir, ignore_errors=True)
+        s_team_dir = TEAM_DIR / session_id
+        if s_team_dir.exists():
+            shutil.rmtree(s_team_dir, ignore_errors=True)
         return {"status": "ok"}
 
     # ==================== 协同与任务看板接口 ====================
 
     @app.get("/api/tasks")
-    def get_tasks():
+    def get_tasks(session_id: Optional[str] = None):
+        if session_id:
+            return TaskManager(TASK_DIR / session_id).get_all_tasks()
         return task_manager.get_all_tasks()
 
     @app.get("/api/team")
-    def get_team():
+    def get_team(session_id: Optional[str] = None):
+        if session_id:
+            s_team_dir = TEAM_DIR / session_id
+            if (s_team_dir / "config.json").exists():
+                tm = TeammateManger(s_team_dir, TaskManager(TASK_DIR / session_id), llm)
+                config = tm.config
+                return {
+                    "team_name": config.get("team_name", "default"),
+                    "members": config.get("members", []),
+                }
+            return {"team_name": "default", "members": []}
         config = team_manager.config
         return {
             "team_name": config.get("team_name", "default"),

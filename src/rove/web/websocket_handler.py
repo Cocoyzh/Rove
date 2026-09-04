@@ -4,7 +4,9 @@ from typing import Dict, Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 from rich.console import Console
 
-from rove.paths import WORKSPACE_ROOT
+from rove.paths import WORKSPACE_ROOT, TASK_DIR, TEAM_DIR
+from rove.task_manager import TaskManager
+from rove.tools.agent_teams import TeammateManger
 from rove.permissions import PermissionPolicy
 from rove.tool_registry import ToolRegistry
 from rove.tools.tools_setup import (
@@ -42,6 +44,14 @@ class SessionConnection:
         # 为该会话构建专属的 WebApprovalManager
         self.approval_mgr = WebApprovalManager(on_approval_needed=self._on_approval_needed)
 
+        # 构建专属于此会话的 TaskManager 与 TeamManager（实现会话级任务看板与协同隔离）
+        self.task_manager = TaskManager(TASK_DIR / self.session_id)
+        self.team_manager = TeammateManger(
+            TEAM_DIR / self.session_id,
+            self.task_manager,
+            self.app_state.llm,
+        )
+
         # 构建专属于此 Web 会话的 ToolRegistry
         self.registry = ToolRegistry(
             PermissionPolicy(WORKSPACE_ROOT),
@@ -51,12 +61,12 @@ class SessionConnection:
             todo_tool,
             execute_python_tool,
             *FILE_TOOLS,
-            *build_team_tools(self.app_state.team_manager),
+            *build_team_tools(self.team_manager),
             build_skill_tool(self.app_state.skill_loader),
-            build_create_task_tool(self.app_state.task_manager),
-            build_update_task_tool(self.app_state.task_manager),
-            build_get_task_tool(self.app_state.task_manager),
-            build_list_all_task_tool(self.app_state.task_manager),
+            build_create_task_tool(self.task_manager),
+            build_update_task_tool(self.task_manager),
+            build_get_task_tool(self.task_manager),
+            build_list_all_task_tool(self.task_manager),
             run_bg_tool,
             check_bg_tool,
         ])
