@@ -204,3 +204,27 @@ def test_dynamic_workspace_isolation(tmp_path):
     dec_escape, reason = policy.decide("read_file", {"path": "../secret.txt"})
     assert dec_escape == PermissionDecision.DENY
     assert "escapes workspace" in reason
+
+
+def test_permission_hard_deny(tmp_path):
+    from rove.permissions import PermissionPolicy, PermissionDecision
+    policy = PermissionPolicy(workspace=tmp_path)
+
+    # 高危命令绝对拦截
+    dec1, reason1 = policy.decide("bash", {"command": "rm -rf /"})
+    assert dec1 == PermissionDecision.DENY
+    assert "Blocked by hard deny rule" in reason1
+
+    dec2, reason2 = policy.decide("bash", {"command": "sudo apt install vim"})
+    assert dec2 == PermissionDecision.DENY
+    assert "Blocked by hard deny rule" in reason2
+
+
+def test_zero_session_auto_recovery():
+    client = TestClient(app)
+    # 获取会话列表，始终保底返回至少 1 个可用会话
+    res = client.get("/api/sessions")
+    assert res.status_code == 200
+    sessions = res.json()
+    assert len(sessions) >= 1
+    assert "id" in sessions[0]
