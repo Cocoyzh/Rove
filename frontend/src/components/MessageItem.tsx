@@ -1,17 +1,16 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { User, Copy, Check, Compass } from 'lucide-react';
-import { ChatMessage, ToolStep } from '../types/rove';
+import { ChatTurn } from '../types/rove';
 import { ToolCard } from './ToolCard';
 
 interface MessageItemProps {
-  message: ChatMessage;
-  associatedToolSteps?: ToolStep[];
+  turn: ChatTurn;
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToolSteps = [] }) => {
-  const isUser = message.role === 'user';
-  const isTool = message.role === 'tool';
+export const MessageItem: React.FC<MessageItemProps> = ({ turn }) => {
+  const isUser = turn.role === 'user';
 
   const CodeBlock = ({ className, children, ...props }: any) => {
     const [copied, setCopied] = useState(false);
@@ -52,18 +51,60 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
     );
   };
 
-  if (isTool) {
-    return null;
-  }
-
-  const content = message.content || '';
-  const isSystemNotice =
-    content.startsWith('<inbox>') ||
-    content.startsWith('<background-results>') ||
-    content.startsWith('<reminder>');
-  if (isSystemNotice) {
-    return null;
-  }
+  const markdownComponents = {
+    code: CodeBlock,
+    p: ({ children }: any) => <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>,
+    ul: ({ children }: any) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+    ol: ({ children }: any) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+    blockquote: ({ children }: any) => (
+      <blockquote className="border-l-2 border-sky-400 pl-3 my-2 text-slate-500 italic">
+        {children}
+      </blockquote>
+    ),
+    table: ({ children }: any) => (
+      <div className="overflow-x-auto my-3 rounded-xl border border-slate-200 shadow-xs bg-white">
+        <table className="min-w-full divide-y divide-slate-200 text-xs text-left text-slate-700">
+          {children}
+        </table>
+      </div>
+    ),
+    thead: ({ children }: any) => (
+      <thead className="bg-slate-50/90 font-medium text-slate-600 select-none border-b border-slate-200">
+        {children}
+      </thead>
+    ),
+    tbody: ({ children }: any) => (
+      <tbody className="divide-y divide-slate-100 bg-white">
+        {children}
+      </tbody>
+    ),
+    tr: ({ children }: any) => (
+      <tr className="hover:bg-slate-50/60 transition-colors">
+        {children}
+      </tr>
+    ),
+    th: ({ children }: any) => (
+      <th className="px-3.5 py-2.5 font-semibold text-slate-700 border-r border-slate-200/60 last:border-r-0 text-left whitespace-nowrap">
+        {children}
+      </th>
+    ),
+    td: ({ children }: any) => (
+      <td className="px-3.5 py-2.5 whitespace-normal leading-relaxed border-r border-slate-100 last:border-r-0 text-slate-600">
+        {children}
+      </td>
+    ),
+    del: ({ children }: any) => <del className="line-through text-slate-400">{children}</del>,
+    a: ({ href, children }: any) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sky-600 hover:text-sky-700 underline font-medium"
+      >
+        {children}
+      </a>
+    ),
+  };
 
   return (
     <div className={`flex w-full my-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -92,52 +133,27 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
             <span>{isUser ? 'You' : 'Rove Lead'}</span>
           </div>
 
-          {/* Markdown 渲染 */}
-          {content && (
-            <div className="prose prose-slate max-w-none prose-sm leading-relaxed break-words text-slate-700">
-              <ReactMarkdown
-                components={{
-                  code: CodeBlock,
-                  p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>,
-                  ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
-                  ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
-                  blockquote: ({ children }) => (
-                    <blockquote className="border-l-2 border-sky-400 pl-3 my-2 text-slate-500 italic">
-                      {children}
-                    </blockquote>
-                  ),
-                }}
-              >
-                {content}
-              </ReactMarkdown>
-            </div>
-          )}
-
-          {/* 历史工具调用 */}
-          {message.tool_calls && message.tool_calls.length > 0 && (
-            <div className="mt-2.5 space-y-1">
-              {message.tool_calls.map((tc) => (
-                <ToolCard
-                  key={tc.tool_id}
-                  step={{
-                    tool_id: tc.tool_id,
-                    tool_name: tc.tool_name,
-                    tool_args: tc.tool_args,
-                    status: 'completed',
-                  }}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* 当前进行中的工具步骤 */}
-          {associatedToolSteps.length > 0 && (
-            <div className="mt-2.5 space-y-1">
-              {associatedToolSteps.map((step) => (
-                <ToolCard key={step.tool_id} step={step} />
-              ))}
-            </div>
-          )}
+          {/* 轮次内容渲染（按自然时间流渲染工具调用与 Markdown 文本） */}
+          <div className="space-y-2">
+            {turn.blocks.map((block, idx) => {
+              if (block.type === 'tool' && block.step) {
+                return <ToolCard key={block.step.tool_id || `tool-${idx}`} step={block.step} />;
+              }
+              if (block.type === 'text' && block.content) {
+                return (
+                  <div key={`text-${idx}`} className="prose prose-slate max-w-none prose-sm leading-relaxed break-words text-slate-700">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={markdownComponents}
+                    >
+                      {block.content}
+                    </ReactMarkdown>
+                  </div>
+                );
+              }
+              return null;
+            })}
+          </div>
         </div>
       </div>
     </div>

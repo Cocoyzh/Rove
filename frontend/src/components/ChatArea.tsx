@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft, Compass } from 'lucide-react';
 import { ChatMessage, ToolStep, ApprovalRequest } from '../types/rove';
 import { MessageItem } from './MessageItem';
+import { groupMessagesIntoTurns } from '../utils/turnGrouper';
 
 interface ChatAreaProps {
   sessionTitle: string;
@@ -40,11 +41,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // 将消息流聚合为自然连贯的对话轮次
+  const turns = useMemo(() => {
+    return groupMessagesIntoTurns(messages, activeToolSteps, currentStreamingText);
+  }, [messages, activeToolSteps, currentStreamingText]);
+
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
     }
-  }, [messages, currentStreamingText, activeToolSteps, pendingApproval]);
+  }, [turns, activeToolSteps, pendingApproval]);
 
   const handleSend = () => {
     if (!input.trim() || isRunning) return;
@@ -156,32 +162,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         )}
 
-        {/* 渲染消息历史 */}
-        {messages.map((msg, index) => (
-          <MessageItem key={msg.id || index} message={msg} />
+        {/* 渲染按轮次聚合的对话（包含工具卡片与 Markdown 回复） */}
+        {turns.map((turn) => (
+          <MessageItem key={turn.id} turn={turn} />
         ))}
-
-        {/* 正在流式打字的消息 */}
-        {currentStreamingText && (
-          <MessageItem
-            message={{
-              role: 'assistant',
-              content: currentStreamingText,
-            }}
-            associatedToolSteps={activeToolSteps}
-          />
-        )}
-
-        {/* 仅工具执行中的占位 */}
-        {!currentStreamingText && activeToolSteps.length > 0 && (
-          <MessageItem
-            message={{
-              role: 'assistant',
-              content: '',
-            }}
-            associatedToolSteps={activeToolSteps}
-          />
-        )}
 
         {/* 权限审批请求卡片 */}
         {pendingApproval && renderApprovalCard && renderApprovalCard(pendingApproval)}

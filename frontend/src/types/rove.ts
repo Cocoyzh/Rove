@@ -24,6 +24,16 @@ export interface ToolStep {
   status: 'running' | 'completed' | 'error';
 }
 
+export type TurnBlock =
+  | { type: 'text'; content: string }
+  | { type: 'tool'; step: ToolStep };
+
+export interface ChatTurn {
+  id: string;
+  role: 'user' | 'assistant';
+  blocks: TurnBlock[];
+}
+
 export interface ApprovalRequest {
   approval_id: string;
   tool_name: string;
