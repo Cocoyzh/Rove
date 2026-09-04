@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Terminal, User, Copy, Check } from 'lucide-react';
+import { User, Copy, Check, Compass } from 'lucide-react';
 import { ChatMessage, ToolStep } from '../types/rove';
 import { ToolCard } from './ToolCard';
 
@@ -13,7 +13,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
   const isUser = message.role === 'user';
   const isTool = message.role === 'tool';
 
-  // 内部代码块组件，提供右上角一键复制
   const CodeBlock = ({ className, children, ...props }: any) => {
     const [copied, setCopied] = useState(false);
     const match = /language-(\w+)/.exec(className || '');
@@ -28,25 +27,25 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
 
     if (!match && !codeString.includes('\n')) {
       return (
-        <code className="bg-black/50 border border-rove-border px-1.5 py-0.5 rounded text-rove-cyan font-mono text-xs" {...props}>
+        <code className="bg-slate-100 text-sky-800 border border-slate-200/80 px-1.5 py-0.5 rounded-md font-mono text-xs" {...props}>
           {children}
         </code>
       );
     }
 
     return (
-      <div className="relative my-3 rounded-lg border border-rove-border bg-black/60 overflow-hidden font-mono text-xs">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-rove-card/70 border-b border-rove-border text-rove-textDim text-[11px] select-none">
+      <div className="relative my-3 rounded-xl border border-slate-800/80 bg-slate-900 overflow-hidden font-mono text-xs shadow-sm">
+        <div className="flex items-center justify-between px-3.5 py-1.5 bg-slate-800/80 border-b border-slate-700/60 text-slate-400 text-[11px] select-none">
           <span>{language || 'text'}</span>
           <button
             onClick={handleCopy}
-            className="flex items-center space-x-1 hover:text-rove-cyan transition-colors"
+            className="flex items-center space-x-1 text-slate-400 hover:text-slate-200 transition-colors"
           >
-            {copied ? <Check size={12} className="text-rove-green" /> : <Copy size={12} />}
-            <span>{copied ? 'Copied' : 'Copy'}</span>
+            {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            <span>{copied ? '已复制' : '复制'}</span>
           </button>
         </div>
-        <pre className="p-3 overflow-x-auto text-rove-textBright leading-relaxed">
+        <pre className="p-3.5 overflow-x-auto text-slate-100 leading-relaxed">
           <code>{children}</code>
         </pre>
       </div>
@@ -54,12 +53,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
   };
 
   if (isTool) {
-    // 单独的 tool role 消息通常在前端不需要重复独立大段渲染，
-    // 因为它们已经聚合在 ToolCard 步骤条中，但在查看详细历史时如果需要，可以极简提示
     return null;
   }
 
-  // 过滤内部系统注入的标记，避免展示杂音（如 <inbox>...</inbox>）
   const content = message.content || '';
   const isSystemNotice =
     content.startsWith('<inbox>') ||
@@ -71,42 +67,42 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
 
   return (
     <div className={`flex w-full my-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex max-w-[88%] ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start space-x-3`}>
+      <div className={`flex max-w-[88%] md:max-w-[80%] ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start space-x-3`}>
         {/* 头像 */}
         <div
-          className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 select-none ${
+          className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 select-none shadow-xs ${
             isUser
-              ? 'bg-rove-border text-rove-cyan ml-3 border border-rove-cyan/30'
-              : 'bg-rove-card text-rove-cyan mr-3 border border-rove-border shadow-[0_0_10px_rgba(34,211,238,0.1)]'
+              ? 'bg-slate-100 text-slate-600 ml-3 border border-slate-200'
+              : 'bg-sky-50 text-sky-600 mr-3 border border-sky-100'
           }`}
         >
-          {isUser ? <User size={16} /> : <Terminal size={16} />}
+          {isUser ? <User size={16} /> : <Compass size={17} />}
         </div>
 
         {/* 气泡内容 */}
         <div
           className={`flex flex-col min-w-0 ${
             isUser
-              ? 'bg-rove-card border border-rove-border rounded-2xl rounded-tr-none px-4 py-3 text-rove-textBright text-sm shadow-sm'
-              : 'w-full text-rove-text text-sm'
+              ? 'bg-slate-100 text-slate-800 rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed border border-slate-200/60 shadow-xs'
+              : 'w-full text-slate-800 text-sm leading-relaxed'
           }`}
         >
-          {/* 用户名字或智能体标志 */}
-          <div className="flex items-center space-x-2 mb-1.5 select-none text-[11px] font-mono text-rove-textDim">
-            <span>{isUser ? 'You' : 'Rove Lead Agent'}</span>
+          {/* 用户或助手标识 */}
+          <div className="flex items-center space-x-2 mb-1.5 select-none text-[11px] text-slate-400 font-medium">
+            <span>{isUser ? 'You' : 'Rove Lead'}</span>
           </div>
 
           {/* Markdown 渲染 */}
           {content && (
-            <div className="prose prose-invert max-w-none prose-sm leading-relaxed break-words">
+            <div className="prose prose-slate max-w-none prose-sm leading-relaxed break-words text-slate-700">
               <ReactMarkdown
                 components={{
                   code: CodeBlock,
-                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                  p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>,
                   ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
                   ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
                   blockquote: ({ children }) => (
-                    <blockquote className="border-l-2 border-rove-cyan/60 pl-3 my-2 text-rove-textDim italic">
+                    <blockquote className="border-l-2 border-sky-400 pl-3 my-2 text-slate-500 italic">
                       {children}
                     </blockquote>
                   ),
@@ -117,9 +113,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
             </div>
           )}
 
-          {/* 关联的工具调用列表 */}
+          {/* 历史工具调用 */}
           {message.tool_calls && message.tool_calls.length > 0 && (
-            <div className="mt-2">
+            <div className="mt-2.5 space-y-1">
               {message.tool_calls.map((tc) => (
                 <ToolCard
                   key={tc.tool_id}
@@ -134,9 +130,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, associatedToo
             </div>
           )}
 
-          {/* 当前正在进行的工具步骤 */}
+          {/* 当前进行中的工具步骤 */}
           {associatedToolSteps.length > 0 && (
-            <div className="mt-2 space-y-1">
+            <div className="mt-2.5 space-y-1">
               {associatedToolSteps.map((step) => (
                 <ToolCard key={step.tool_id} step={step} />
               ))}

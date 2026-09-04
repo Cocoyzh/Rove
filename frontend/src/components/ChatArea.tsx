@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Terminal, Loader2, Sparkles, Sidebar as SidebarIcon, CheckCircle2 } from 'lucide-react';
+import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft, Compass } from 'lucide-react';
 import { ChatMessage, ToolStep, ApprovalRequest } from '../types/rove';
 import { MessageItem } from './MessageItem';
 
@@ -13,6 +13,8 @@ interface ChatAreaProps {
   isRunning: boolean;
   onSendMessage: (query: string) => void;
   onSendApproval: (approvalId: string, decision: 'y' | 's' | 'N') => void;
+  isSidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
   isCollabOpen: boolean;
   onToggleCollab: () => void;
   renderApprovalCard?: (approval: ApprovalRequest) => React.ReactNode;
@@ -28,6 +30,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   isRunning,
   onSendMessage,
   onSendApproval,
+  isSidebarCollapsed,
+  onToggleSidebar,
   isCollabOpen,
   onToggleCollab,
   renderApprovalCard,
@@ -36,7 +40,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // 智能自动滚动到底部
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
@@ -66,86 +69,99 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const quickPrompts = [
-    '查看当前任务看板状态并汇报',
-    '检查项目结构并读取 README.md',
-    '列出所有后台 Teammates 的运行状态',
+    '分析当前仓库的项目结构与核心模块',
+    '检查并总结当前的待办与看板任务',
+    '查看所有的后台 Teammates 协同线程',
   ];
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-rove-bg relative">
-      {/* 顶部会话栏 */}
-      <header className="h-14 border-b border-rove-border px-6 flex items-center justify-between bg-rove-sidebar/30 backdrop-blur select-none z-10">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-white relative">
+      {/* 顶部会话导航栏 */}
+      <header className="h-14 border-b border-slate-200/80 px-4 md:px-6 flex items-center justify-between bg-white/90 backdrop-blur select-none z-10">
         <div className="flex items-center space-x-3 min-w-0">
-          <span className="font-mono text-sm font-semibold text-rove-textBright truncate max-w-md">
+          {/* 当侧边栏收起时展示的平滑展开按钮 */}
+          <button
+            onClick={onToggleSidebar}
+            className={`p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors ${
+              isSidebarCollapsed ? 'opacity-100' : 'opacity-70'
+            }`}
+            title={isSidebarCollapsed ? '展开左侧边栏' : '收起左侧边栏'}
+          >
+            <PanelLeft size={18} />
+          </button>
+
+          <span className="font-medium text-sm text-slate-800 truncate max-w-sm">
             {sessionTitle || '新会话'}
           </span>
+
           <div className="flex items-center space-x-1.5 text-xs">
             <span
               className={`w-2 h-2 rounded-full ${
-                isConnected ? 'bg-rove-green shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rove-red'
+                isConnected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-rose-500'
               }`}
             />
-            <span className="font-mono text-[10px] text-rove-textDim">
-              {isConnected ? 'LIVE' : 'DISCONNECTED'}
+            <span className="text-[11px] text-slate-400 font-medium">
+              {isConnected ? '在线就绪' : '连接断开'}
             </span>
           </div>
         </div>
 
+        {/* 右侧协同面板切换按钮 */}
         <button
           onClick={onToggleCollab}
-          className={`p-2 rounded-lg border text-xs flex items-center space-x-1.5 transition-colors ${
+          className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center space-x-1.5 transition-all ${
             isCollabOpen
-              ? 'bg-rove-card border-rove-cyan/40 text-rove-cyan'
-              : 'border-rove-border hover:bg-rove-card text-rove-textDim hover:text-rove-text'
+              ? 'bg-sky-50 border-sky-200 text-sky-700 shadow-xs'
+              : 'border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-900'
           }`}
-          title="切换协同面板 (Task 看板 & Teammates)"
+          title="切换协同看板"
         >
-          <SidebarIcon size={15} />
-          <span className="font-mono text-xs hidden sm:inline">协同面板</span>
+          <SidebarIcon size={14} />
+          <span className="hidden sm:inline">协同看板</span>
         </button>
       </header>
 
-      {/* 对话消息区 */}
+      {/* 对话消息滚动区 */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-2 scroll-smooth"
+        className="flex-1 overflow-y-auto px-4 md:px-12 py-6 space-y-3 scroll-smooth"
       >
         {messages.length === 0 && !currentStreamingText && activeToolSteps.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center space-y-6 max-w-xl mx-auto py-12">
-            <div className="w-12 h-12 rounded-2xl bg-rove-card border border-rove-border flex items-center justify-center text-rove-cyan shadow-[0_0_20px_rgba(34,211,238,0.15)]">
-              <Terminal size={24} />
+          <div className="flex flex-col items-center justify-center h-full text-center space-y-6 max-w-lg mx-auto py-12">
+            <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600 shadow-sm">
+              <Compass size={24} />
             </div>
             <div>
-              <h2 className="text-lg font-mono font-bold text-rove-textBright tracking-wide">
-                Rove Multi-Agent Harness
+              <h2 className="text-xl font-semibold text-slate-800 tracking-tight">
+                欢迎使用 Rove 智能体工作台
               </h2>
-              <p className="text-xs text-rove-textDim mt-2 leading-relaxed">
-                面向高复杂度编码任务的多智能体协作平台。由 Lead Agent 编排规划，后台 Teammate 自主并发抢单执行。
+              <p className="text-xs text-slate-500 mt-2 leading-relaxed max-w-md">
+                由 Lead Agent 负责交互规划与验证，后台 Teammate 自主并发抢单协作。输入任务即可开始。
               </p>
             </div>
 
-            {/* 快捷引导卡片 */}
-            <div className="w-full grid grid-cols-1 gap-2 pt-4">
+            {/* 推荐引导卡片 */}
+            <div className="w-full grid grid-cols-1 gap-2 pt-2">
               {quickPrompts.map((p, idx) => (
                 <button
                   key={idx}
                   onClick={() => onSendMessage(p)}
-                  className="p-3 text-left rounded-lg bg-rove-card/60 hover:bg-rove-card border border-rove-border hover:border-rove-cyan/40 text-xs text-rove-text hover:text-rove-cyan transition-all flex items-center justify-between group"
+                  className="p-3 text-left rounded-xl bg-slate-50 hover:bg-slate-100/80 border border-slate-200 text-xs text-slate-700 hover:text-sky-700 transition-all flex items-center justify-between group shadow-xs"
                 >
-                  <span className="font-mono">{p}</span>
-                  <Sparkles size={13} className="text-rove-textDim group-hover:text-rove-cyan opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <span>{p}</span>
+                  <Sparkles size={13} className="text-slate-400 group-hover:text-sky-600 transition-colors" />
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* 历史消息渲染 */}
+        {/* 渲染消息历史 */}
         {messages.map((msg, index) => (
           <MessageItem key={msg.id || index} message={msg} />
         ))}
 
-        {/* 当前流式吐字输出 */}
+        {/* 正在流式打字的消息 */}
         {currentStreamingText && (
           <MessageItem
             message={{
@@ -156,7 +172,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           />
         )}
 
-        {/* 仅工具执行中但尚未产生后续文本时的占位展示 */}
+        {/* 仅工具执行中的占位 */}
         {!currentStreamingText && activeToolSteps.length > 0 && (
           <MessageItem
             message={{
@@ -170,18 +186,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         {/* 权限审批请求卡片 */}
         {pendingApproval && renderApprovalCard && renderApprovalCard(pendingApproval)}
 
-        {/* 思考中加载态 */}
+        {/* 思考中状态 */}
         {isRunning && !currentStreamingText && activeToolSteps.length === 0 && !pendingApproval && (
-          <div className="flex items-center space-x-2 text-xs text-rove-cyan font-mono py-3 px-4 rounded-lg bg-rove-card/40 border border-rove-border w-fit animate-pulse">
-            <Loader2 size={13} className="animate-spin" />
-            <span>Lead Agent 正在分析并规划步骤...</span>
+          <div className="flex items-center space-x-2 text-xs text-sky-700 py-2.5 px-3.5 rounded-xl bg-sky-50 border border-sky-100 w-fit animate-pulse shadow-xs">
+            <Loader2 size={13} className="animate-spin text-sky-600" />
+            <span>智能体正在思考与调度步骤...</span>
           </div>
         )}
       </div>
 
-      {/* 底部输入控制条 */}
-      <div className="p-4 md:p-6 border-t border-rove-border bg-rove-sidebar/40 backdrop-blur">
-        <div className="max-w-4xl mx-auto relative rounded-xl border border-rove-border bg-rove-card/90 focus-within:border-rove-cyan/60 transition-all shadow-lg">
+      {/* 底部输入框 */}
+      <div className="p-4 md:p-6 bg-gradient-to-t from-white via-white to-transparent">
+        <div className="max-w-3xl mx-auto relative rounded-2xl border border-slate-200/90 bg-white focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-100/60 transition-all shadow-md">
           <textarea
             ref={textareaRef}
             value={input}
@@ -189,25 +205,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             onKeyDown={handleKeyDown}
             placeholder={
               isConnected
-                ? '输入指令或编码需求... (Enter 发送, Shift+Enter 换行)'
-                : '正在连接服务...'
+                ? '给 Rove 发送消息... (Enter 发送, Shift+Enter 换行)'
+                : '正在连接服务中...'
             }
             disabled={!isConnected}
             rows={1}
-            className="w-full bg-transparent px-4 pt-3.5 pb-12 text-sm text-rove-textBright placeholder-rove-textDim resize-none outline-none font-sans"
+            className="w-full bg-transparent px-4 pt-3.5 pb-12 text-sm text-slate-800 placeholder-slate-400 resize-none outline-none font-sans"
           />
 
-          <div className="absolute bottom-2.5 right-3 flex items-center space-x-2">
-            <span className="text-[10px] font-mono text-rove-textDim hidden sm:inline">
-              Shift+Enter 换行
+          <div className="absolute bottom-2.5 right-3 flex items-center space-x-2.5">
+            <span className="text-[11px] text-slate-400 hidden sm:inline font-sans">
+              Enter 发送
             </span>
             <button
               onClick={handleSend}
               disabled={!input.trim() || isRunning || !isConnected}
-              className={`p-2 rounded-lg transition-all ${
+              className={`p-2 rounded-xl transition-all ${
                 input.trim() && !isRunning && isConnected
-                  ? 'bg-rove-cyan text-black hover:bg-rove-cyanHover shadow-[0_0_12px_rgba(34,211,238,0.3)]'
-                  : 'bg-rove-border text-rove-textDim cursor-not-allowed'
+                  ? 'bg-sky-600 text-white hover:bg-sky-500 shadow-sm'
+                  : 'bg-slate-100 text-slate-300 cursor-not-allowed'
               }`}
               title="发送"
             >

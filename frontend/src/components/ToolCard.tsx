@@ -22,44 +22,39 @@ export const ToolCard: React.FC<ToolCardProps> = ({ step }) => {
   const isRunning = step.status === 'running';
   const isError = step.status === 'error' || step.is_error;
 
-  // 格式化参数摘要展示
   const argsSummary = Object.entries(step.tool_args || {})
     .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
     .join(', ');
 
   return (
-    <div className="my-2 rounded-lg border border-rove-border bg-rove-card/80 overflow-hidden text-xs font-mono transition-all">
+    <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden text-xs font-sans transition-all shadow-xs">
       {/* 头部摘要栏 */}
       <div
         onClick={() => setIsExpanded((prev) => !prev)}
-        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-rove-border/40 select-none"
+        className="flex items-center justify-between px-3.5 py-2.5 cursor-pointer hover:bg-slate-50 select-none transition-colors"
       >
         <div className="flex items-center space-x-2 min-w-0 flex-1">
-          {/* 状态图标 */}
           {isRunning ? (
-            <Loader2 size={14} className="text-rove-cyan animate-spin flex-shrink-0" />
+            <Loader2 size={14} className="text-sky-600 animate-spin flex-shrink-0" />
           ) : isError ? (
-            <AlertCircle size={14} className="text-rove-red flex-shrink-0" />
+            <AlertCircle size={14} className="text-rose-500 flex-shrink-0" />
           ) : (
-            <CheckCircle2 size={14} className="text-rove-green flex-shrink-0" />
+            <CheckCircle2 size={14} className="text-emerald-600 flex-shrink-0" />
           )}
 
-          {/* 工具名 */}
           <div className="flex items-center space-x-1.5 flex-shrink-0">
-            <Wrench size={12} className="text-rove-yellow" />
-            <span className="font-semibold text-rove-cyan">{step.tool_name}</span>
+            <Wrench size={12} className="text-amber-500" />
+            <span className="font-semibold text-slate-800 font-mono">{step.tool_name}</span>
           </div>
 
-          {/* 参数预览 */}
-          <span className="text-rove-textDim truncate max-w-[450px]">
+          <span className="text-slate-400 font-mono text-[11px] truncate max-w-[450px]">
             ({argsSummary})
           </span>
         </div>
 
-        {/* 右侧耗时与展开箭头 */}
-        <div className="flex items-center space-x-2 flex-shrink-0 ml-3 text-rove-textDim">
+        <div className="flex items-center space-x-2 flex-shrink-0 ml-3 text-slate-400">
           {step.cost_ms !== undefined && (
-            <span className="text-[10px] text-rove-textDim">{step.cost_ms}ms</span>
+            <span className="text-[10px] font-mono text-slate-400">{step.cost_ms}ms</span>
           )}
           {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </div>
@@ -67,31 +62,31 @@ export const ToolCard: React.FC<ToolCardProps> = ({ step }) => {
 
       {/* 展开的详情部分 */}
       {isExpanded && (
-        <div className="border-t border-rove-border p-3 space-y-2.5 bg-rove-bg/60">
-          {/* 参数详情 */}
+        <div className="border-t border-slate-100 p-3 space-y-2.5 bg-slate-50/50">
           <div>
-            <div className="text-[10px] text-rove-textDim uppercase tracking-wider mb-1">Arguments</div>
-            <pre className="p-2 rounded bg-black/40 border border-rove-border/60 text-rove-text text-[11px] overflow-x-auto">
+            <div className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">调用参数</div>
+            <pre className="p-2.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-[11px] font-mono overflow-x-auto shadow-xs">
               {JSON.stringify(step.tool_args, null, 2)}
             </pre>
           </div>
 
-          {/* 执行结果 */}
           {step.output && (
             <div>
-              <div className="flex items-center justify-between text-[10px] text-rove-textDim uppercase tracking-wider mb-1">
-                <span>Output</span>
+              <div className="flex items-center justify-between text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-1">
+                <span>执行结果</span>
                 <button
                   onClick={handleCopy}
-                  className="flex items-center space-x-1 hover:text-rove-cyan transition-colors"
+                  className="flex items-center space-x-1 text-slate-400 hover:text-sky-600 transition-colors"
                 >
-                  {copied ? <Check size={11} className="text-rove-green" /> : <Copy size={11} />}
-                  <span>{copied ? 'Copied' : 'Copy'}</span>
+                  {copied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+                  <span>{copied ? '已复制' : '复制'}</span>
                 </button>
               </div>
               <pre
-                className={`p-2.5 rounded bg-black/40 border text-[11px] max-h-60 overflow-y-auto whitespace-pre-wrap ${
-                  isError ? 'border-rove-red/40 text-red-300' : 'border-rove-border/60 text-rove-text'
+                className={`p-2.5 rounded-lg border text-[11px] font-mono max-h-60 overflow-y-auto whitespace-pre-wrap ${
+                  isError
+                    ? 'bg-rose-50 border-rose-200 text-rose-700'
+                    : 'bg-white border-slate-200 text-slate-700 shadow-xs'
                 }`}
               >
                 {step.output}

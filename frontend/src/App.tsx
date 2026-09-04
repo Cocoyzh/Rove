@@ -11,7 +11,7 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isCollabOpen, setIsCollabOpen] = useState(true);
+  const [isCollabOpen, setIsCollabOpen] = useState(false);
 
   // 获取所有会话列表
   const fetchSessions = useCallback(async () => {
@@ -137,8 +137,8 @@ export default function App() {
   const currentSession = sessions.find((s) => s.id === currentSessionId);
 
   return (
-    <div className="flex h-screen w-screen bg-rove-bg text-rove-text overflow-hidden font-sans">
-      {/* 1. 左侧栏：会话管理与系统状态 */}
+    <div className="flex h-screen w-screen bg-white text-slate-700 overflow-hidden font-sans">
+      {/* 1. 左侧栏：会话管理与系统状态 (平滑渐变折叠) */}
       <Sidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
@@ -163,6 +163,8 @@ export default function App() {
         isRunning={isRunning}
         onSendMessage={sendMessage}
         onSendApproval={sendApproval}
+        isSidebarCollapsed={isSidebarCollapsed}
+        onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
         isCollabOpen={isCollabOpen}
         onToggleCollab={() => setIsCollabOpen((prev) => !prev)}
         renderApprovalCard={(appr) => (
@@ -170,7 +172,7 @@ export default function App() {
         )}
       />
 
-      {/* 3. 右侧栏：Task 看板与 Teammates 协同监控 */}
+      {/* 3. 右侧栏：Task 看板与 Teammates 协同监控 (平滑渐变折叠) */}
       <CollabPanel
         isOpen={isCollabOpen}
         onClose={() => setIsCollabOpen(false)}

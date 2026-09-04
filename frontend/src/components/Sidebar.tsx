@@ -8,10 +8,10 @@ import {
   Terminal,
   Activity,
   ChevronLeft,
-  ChevronRight,
   Check,
   X,
   Edit2,
+  Compass,
 } from 'lucide-react';
 import { SessionSummary, SystemStatus } from '../types/rove';
 
@@ -62,214 +62,189 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setEditingSessionId(null);
   };
 
-  if (isCollapsed) {
-    return (
-      <div className="w-14 h-full bg-rove-sidebar border-r border-rove-border flex flex-col items-center py-4 justify-between transition-all duration-300">
-        <div className="flex flex-col items-center space-y-4">
-          <button
-            onClick={onToggleCollapse}
-            className="p-2 hover:bg-rove-card rounded-lg text-rove-textDim hover:text-rove-cyan transition-colors"
-            title="展开侧边栏"
-          >
-            <ChevronRight size={18} />
-          </button>
-          <button
-            onClick={onCreateSession}
-            className="p-2.5 bg-rove-card hover:bg-rove-border rounded-lg text-rove-cyan transition-colors"
-            title="新建会话"
-          >
-            <Plus size={18} />
-          </button>
-        </div>
-        <div className="flex flex-col items-center space-y-3 text-rove-textDim">
-          <button
-            onClick={onTriggerCompact}
-            className="p-2 hover:bg-rove-card rounded-lg hover:text-rove-yellow transition-colors"
-            title="立即压缩上下文 (/compact)"
-          >
-            <Archive size={16} />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const contextPct = systemStatus?.context_used_pct || 0;
   const pctColor =
-    contextPct > 80 ? 'bg-rove-red' : contextPct > 50 ? 'bg-rove-yellow' : 'bg-rove-cyan';
+    contextPct > 80 ? 'bg-rose-500' : contextPct > 50 ? 'bg-amber-500' : 'bg-sky-500';
 
   return (
-    <aside className="w-72 h-full bg-rove-sidebar border-r border-rove-border flex flex-col justify-between transition-all duration-300 select-none">
-      {/* 顶部标题栏与新建按钮 */}
-      <div className="p-4 border-b border-rove-border">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-lg bg-rove-card border border-rove-border flex items-center justify-center text-rove-cyan shadow-[0_0_12px_rgba(34,211,238,0.15)]">
-              <Terminal size={18} />
-            </div>
-            <div>
-              <span className="font-mono font-bold tracking-wider text-rove-textBright text-base">
-                ROVE
-              </span>
-              <span className="text-[10px] ml-1.5 px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40 text-rove-cyan font-mono">
-                v0.1
-              </span>
-            </div>
-          </div>
-          <button
-            onClick={onToggleCollapse}
-            className="p-1.5 hover:bg-rove-card rounded-md text-rove-textDim hover:text-rove-text transition-colors"
-            title="收起侧边栏"
-          >
-            <ChevronLeft size={16} />
-          </button>
-        </div>
-
-        <button
-          onClick={onCreateSession}
-          className="w-full py-2 px-3 rounded-lg border border-rove-cyan/30 bg-rove-cyan/10 hover:bg-rove-cyan/20 text-rove-cyan flex items-center justify-center space-x-2 text-sm font-medium transition-all shadow-[0_0_15px_rgba(34,211,238,0.08)]"
-        >
-          <Plus size={16} />
-          <span>新会话 (New Chat)</span>
-        </button>
-      </div>
-
-      {/* 会话历史列表 */}
-      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
-        <div className="px-2 pb-1 text-[11px] font-mono text-rove-textDim uppercase tracking-wider">
-          Sessions
-        </div>
-        {sessions.length === 0 ? (
-          <div className="text-center py-8 text-xs text-rove-textDim">暂无会话历史</div>
-        ) : (
-          sessions.map((s) => {
-            const isActive = s.id === currentSessionId;
-            const isEditing = editingSessionId === s.id;
-
-            return (
-              <div
-                key={s.id}
-                onClick={() => !isEditing && onSelectSession(s.id)}
-                className={`group relative flex items-center justify-between px-3 py-2.5 rounded-lg text-sm cursor-pointer transition-colors ${
-                  isActive
-                    ? 'bg-rove-card text-rove-cyan font-medium border border-rove-border'
-                    : 'text-rove-text hover:bg-rove-card/50 hover:text-rove-textBright'
-                }`}
-              >
-                <div className="flex items-center space-x-2.5 min-w-0 flex-1">
-                  <MessageSquare
-                    size={15}
-                    className={isActive ? 'text-rove-cyan' : 'text-rove-textDim group-hover:text-rove-text'}
-                  />
-                  {isEditing ? (
-                    <input
-                      type="text"
-                      value={editingTitle}
-                      onChange={(e) => setEditingTitle(e.target.value)}
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') confirmRename(s.id, e as any);
-                        if (e.key === 'Escape') cancelRename(e as any);
-                      }}
-                      autoFocus
-                      className="bg-rove-bg border border-rove-cyan/60 rounded px-1.5 py-0.5 text-xs text-rove-textBright outline-none w-36 font-sans"
-                    />
-                  ) : (
-                    <span className="truncate text-xs">{s.title}</span>
-                  )}
-                </div>
-
-                {/* 悬停操作按钮 */}
-                <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-                  {isEditing ? (
-                    <>
-                      <button
-                        onClick={(e) => confirmRename(s.id, e)}
-                        className="p-1 hover:text-rove-green text-rove-textDim"
-                        title="确认"
-                      >
-                        <Check size={13} />
-                      </button>
-                      <button
-                        onClick={cancelRename}
-                        className="p-1 hover:text-rove-red text-rove-textDim"
-                        title="取消"
-                      >
-                        <X size={13} />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={(e) => startRename(s, e)}
-                        className="p-1 hover:text-rove-cyan text-rove-textDim transition-colors"
-                        title="重命名"
-                      >
-                        <Edit2 size={12} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteSession(s.id);
-                        }}
-                        className="p-1 hover:text-rove-red text-rove-textDim transition-colors"
-                        title="删除会话"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </>
-                  )}
-                </div>
+    <aside
+      className={`h-full bg-slate-50 border-r border-slate-200 flex flex-col justify-between select-none flex-shrink-0 transition-all duration-300 ease-in-out ${
+        isCollapsed ? 'w-0 opacity-0 pointer-events-none' : 'w-64 md:w-72 opacity-100'
+      } overflow-hidden`}
+    >
+      {/* 内部固定宽度的容器，保证伸缩动画时内部元素不产生突兀挤压换行 */}
+      <div className="w-64 md:w-72 h-full flex flex-col justify-between">
+        {/* 顶部标题与新建按钮 */}
+        <div className="p-3.5 border-b border-slate-200/80">
+          <div className="flex items-center justify-between mb-3 px-1">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-sky-600 shadow-sm">
+                <Compass size={17} />
               </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* 底部系统状态指标面板 */}
-      <div className="p-3 border-t border-rove-border bg-rove-sidebar/50">
-        <div className="rounded-lg bg-rove-card border border-rove-border p-3 space-y-2.5 text-xs">
-          <div className="flex items-center justify-between text-rove-textDim">
-            <div className="flex items-center space-x-1.5">
-              <Cpu size={13} className="text-rove-cyan" />
-              <span className="font-mono text-[11px]">MODEL</span>
+              <div className="flex items-baseline space-x-1.5">
+                <span className="font-semibold text-slate-900 text-sm tracking-tight">
+                  Rove
+                </span>
+                <span className="text-[11px] text-slate-400 font-normal">
+                  Agent Harness
+                </span>
+              </div>
             </div>
-            <span className="font-mono text-rove-textBright truncate max-w-[120px]" title={systemStatus?.model || 'Claude'}>
-              {systemStatus?.model ? systemStatus.model.replace('claude-', '') : 'Sonnet'}
-            </span>
-          </div>
-
-          <div>
-            <div className="flex justify-between text-[11px] text-rove-textDim font-mono mb-1">
-              <span>CONTEXT</span>
-              <span>{contextPct.toFixed(1)}%</span>
-            </div>
-            <div className="w-full h-1.5 bg-rove-bg rounded-full overflow-hidden border border-rove-border">
-              <div
-                className={`h-full ${pctColor} transition-all duration-500`}
-                style={{ width: `${Math.min(Math.max(contextPct, 2), 100)}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-1 border-t border-rove-border/50 text-[11px] font-mono text-rove-textDim">
-            <div className="flex items-center space-x-1">
-              <Activity size={12} />
-              <span>TOKENS</span>
-            </div>
-            <span>
-              {((systemStatus?.total_input_tokens || 0) + (systemStatus?.total_output_tokens || 0)).toLocaleString()}
-            </span>
+            <button
+              onClick={onToggleCollapse}
+              className="p-1 hover:bg-slate-200/60 rounded-md text-slate-400 hover:text-slate-700 transition-colors"
+              title="收起侧边栏"
+            >
+              <ChevronLeft size={16} />
+            </button>
           </div>
 
           <button
-            onClick={onTriggerCompact}
-            className="w-full mt-1 py-1.5 px-2 bg-rove-bg hover:bg-rove-border border border-rove-border rounded text-[11px] font-mono text-rove-textDim hover:text-rove-yellow flex items-center justify-center space-x-1.5 transition-colors"
-            title="手动触发四层归档摘要压缩"
+            onClick={onCreateSession}
+            className="w-full py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 hover:text-slate-900 flex items-center justify-center space-x-2 text-xs font-medium shadow-sm transition-all group"
           >
-            <Archive size={12} />
-            <span>/compact 会话归档</span>
+            <Plus size={15} className="text-sky-600 group-hover:scale-110 transition-transform" />
+            <span>新建会话</span>
           </button>
+        </div>
+
+        {/* 会话列表 */}
+        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+          <div className="px-2.5 pb-1.5 text-[11px] font-medium text-slate-400 uppercase tracking-wider">
+            对话历史
+          </div>
+          {sessions.length === 0 ? (
+            <div className="text-center py-8 text-xs text-slate-400">暂无会话</div>
+          ) : (
+            sessions.map((s) => {
+              const isActive = s.id === currentSessionId;
+              const isEditing = editingSessionId === s.id;
+
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => !isEditing && onSelectSession(s.id)}
+                  className={`group relative flex items-center justify-between px-3 py-2.5 rounded-xl text-xs cursor-pointer transition-all ${
+                    isActive
+                      ? 'bg-white text-sky-700 font-medium shadow-sm border border-slate-200'
+                      : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2.5 min-w-0 flex-1">
+                    <MessageSquare
+                      size={14}
+                      className={isActive ? 'text-sky-600' : 'text-slate-400 group-hover:text-slate-500'}
+                    />
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') confirmRename(s.id, e as any);
+                          if (e.key === 'Escape') cancelRename(e as any);
+                        }}
+                        autoFocus
+                        className="bg-white border border-sky-500 rounded px-1.5 py-0.5 text-xs text-slate-800 outline-none w-36 shadow-inner"
+                      />
+                    ) : (
+                      <span className="truncate text-xs">{s.title}</span>
+                    )}
+                  </div>
+
+                  {/* 悬停操作按钮 */}
+                  <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                    {isEditing ? (
+                      <>
+                        <button
+                          onClick={(e) => confirmRename(s.id, e)}
+                          className="p-1 hover:text-emerald-600 text-slate-400"
+                          title="保存"
+                        >
+                          <Check size={13} />
+                        </button>
+                        <button
+                          onClick={cancelRename}
+                          className="p-1 hover:text-rose-600 text-slate-400"
+                          title="取消"
+                        >
+                          <X size={13} />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={(e) => startRename(s, e)}
+                          className="p-1 hover:text-sky-600 text-slate-400 transition-colors"
+                          title="重命名"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteSession(s.id);
+                          }}
+                          className="p-1 hover:text-rose-600 text-slate-400 transition-colors"
+                          title="删除会话"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* 底部系统状态指标卡片 */}
+        <div className="p-3 border-t border-slate-200/80 bg-slate-100/50">
+          <div className="rounded-xl bg-white border border-slate-200/90 p-3 space-y-2.5 text-xs shadow-sm">
+            <div className="flex items-center justify-between text-slate-500">
+              <div className="flex items-center space-x-1.5">
+                <Cpu size={13} className="text-sky-600" />
+                <span className="text-[11px] font-medium">模型后端</span>
+              </div>
+              <span className="text-slate-800 font-mono text-[11px] truncate max-w-[120px]" title={systemStatus?.model || 'Claude'}>
+                {systemStatus?.model || 'Anthropic'}
+              </span>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-500 mb-1">
+                <span>上下文窗口</span>
+                <span className="font-mono text-slate-700">{contextPct.toFixed(1)}%</span>
+              </div>
+              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                <div
+                  className={`h-full ${pctColor} transition-all duration-500`}
+                  style={{ width: `${Math.min(Math.max(contextPct, 2), 100)}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[11px] text-slate-500">
+              <div className="flex items-center space-x-1">
+                <Activity size={12} />
+                <span>累计 Tokens</span>
+              </div>
+              <span className="font-mono text-slate-700">
+                {((systemStatus?.total_input_tokens || 0) + (systemStatus?.total_output_tokens || 0)).toLocaleString()}
+              </span>
+            </div>
+
+            <button
+              onClick={onTriggerCompact}
+              className="w-full mt-1 py-1.5 px-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] text-slate-600 hover:text-slate-900 flex items-center justify-center space-x-1.5 transition-colors"
+              title="手动归档并压缩历史上下文"
+            >
+              <Archive size={12} className="text-amber-600" />
+              <span>压缩会话 (/compact)</span>
+            </button>
+          </div>
         </div>
       </div>
     </aside>
