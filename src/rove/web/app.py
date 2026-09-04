@@ -129,7 +129,11 @@ def create_app() -> FastAPI:
                 session_tokens = s.get("total_input_tokens", 0) + s.get("total_output_tokens", 0)
 
         pct = round(session_ctx / llm.context_window * 100, 2) if (llm.context_window and session_ctx) else 0.0
-        project_total = llm.total_input_tokens + llm.total_output_tokens
+        
+        # 项目总计开销持久化统计：汇总所有持久化会话消耗，并结合内存实时指标
+        disk_total = session_manager.get_project_total_tokens()
+        in_memory_total = llm.total_input_tokens + llm.total_output_tokens
+        project_total = max(disk_total, in_memory_total, session_tokens)
 
         return {
             "model": llm.model,

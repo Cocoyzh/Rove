@@ -75,6 +75,18 @@ class SessionManager:
             sessions.sort(key=lambda s: s["updated_at"], reverse=True)
             return sessions
 
+    def get_project_total_tokens(self) -> int:
+        """获取当前项目工作区下所有持久化会话累计消耗的 Token 总量。"""
+        with self._lock:
+            total = 0
+            for file in self.dir.glob("*.json"):
+                try:
+                    data = json.loads(file.read_text(encoding="utf-8"))
+                    total += data.get("total_input_tokens", 0) + data.get("total_output_tokens", 0)
+                except Exception:
+                    continue
+            return total
+
     def create_session(self, title: str = "新会话") -> Dict[str, Any]:
         session_id = f"s_{uuid.uuid4().hex[:12]}"
         now = time.time()

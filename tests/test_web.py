@@ -35,7 +35,8 @@ def test_session_manager_crud(tmp_path):
         ),
         Message(role="tool", tool_call_id="call_1", content="file content here"),
     ]
-    sm.save_session_messages(sid, msgs, auto_title=False)
+    sm.save_session_messages(sid, msgs, auto_title=False, input_tokens=1000, output_tokens=500)
+    assert sm.get_project_total_tokens() == 1500
 
     # 5. 加载消息并校验结构
     restored = sm.load_session_messages(sid)

@@ -62,9 +62,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setEditingSessionId(null);
   };
 
+  const sessionCtx = systemStatus?.session_context_tokens || 0;
+  const contextWindow = systemStatus?.context_window || 1_000_000;
   const contextPct = systemStatus?.context_used_pct || 0;
   const pctColor =
     contextPct > 80 ? 'bg-rose-500' : contextPct > 50 ? 'bg-amber-500' : 'bg-sky-500';
+
+  const formatTokenCount = (num: number): string => {
+    if (num >= 1_000_000) {
+      return `${(num / 1_000_000).toFixed(num % 1_000_000 === 0 ? 0 : 1)}M`;
+    }
+    if (num >= 10_000) {
+      return `${(num / 1_000).toFixed(0)}k`;
+    }
+    if (num >= 1_000) {
+      return `${(num / 1_000).toFixed(1)}k`;
+    }
+    return num.toLocaleString();
+  };
+
+  const contextPctLabel =
+    contextPct === 0
+      ? '0%'
+      : contextPct < 0.1
+      ? '<0.1%'
+      : `${contextPct.toFixed(1)}%`;
 
   return (
     <aside
@@ -214,14 +236,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             <div>
-              <div className="flex justify-between text-[11px] text-slate-500 mb-1">
-                <span>上下文窗口</span>
-                <span className="font-mono text-slate-700">{contextPct.toFixed(1)}%</span>
+              <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+                <div className="flex items-center space-x-1.5">
+                  <span>上下文</span>
+                  <span className="font-mono text-slate-700 text-[10px]">
+                    {sessionCtx > 0 ? `${formatTokenCount(sessionCtx)} / ${formatTokenCount(contextWindow)}` : `0 / ${formatTokenCount(contextWindow)}`}
+                  </span>
+                </div>
+                <span className="font-mono text-slate-500 text-[10px]" title={`精确占用: ${contextPct.toFixed(3)}% (${sessionCtx.toLocaleString()} / ${contextWindow.toLocaleString()} tokens)`}>
+                  {contextPctLabel}
+                </span>
               </div>
               <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
                 <div
                   className={`h-full ${pctColor} transition-all duration-500`}
-                  style={{ width: `${Math.min(Math.max(contextPct, 2), 100)}%` }}
+                  style={{ width: `${sessionCtx > 0 ? Math.min(Math.max(contextPct, 2), 100) : 0}%` }}
                 />
               </div>
             </div>
@@ -233,13 +262,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <Activity size={12} className="text-sky-600" />
                   <span className="font-medium text-slate-600">本会话消耗</span>
                 </div>
-                <span className="font-mono text-slate-800 font-medium">
+                <span className="font-mono text-slate-800 font-medium" title="当前会话所有往返交互消耗的输入与输出 Token 总和">
                   {(systemStatus?.session_tokens || 0).toLocaleString()}
                 </span>
               </div>
 
               <div className="flex items-center justify-between text-[10px] text-slate-400">
-                <span>项目总计开销</span>
+                <span title="当前工作区下所有会话的累计消耗总和">项目总计开销</span>
                 <span className="font-mono text-slate-500">
                   {((systemStatus?.project_total_tokens ?? (systemStatus?.total_input_tokens || 0) + (systemStatus?.total_output_tokens || 0))).toLocaleString()}
                 </span>

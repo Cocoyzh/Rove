@@ -113,8 +113,12 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
                     break
         usage = None
         if hasattr(message, "usage"):
-            usage = Usage(input_tokens=message.usage.input_tokens,
-                          output_tokens=message.usage.output_tokens)
+            cache_read = getattr(message.usage, "cache_read_input_tokens", 0) or 0
+            cache_creation = getattr(message.usage, "cache_creation_input_tokens", 0) or 0
+            raw_input = getattr(message.usage, "input_tokens", 0) or 0
+            total_input = raw_input + cache_read + cache_creation
+            usage = Usage(input_tokens=total_input,
+                          output_tokens=getattr(message.usage, "output_tokens", 0) or 0)
         return LLMResponse(
             content=text,
             tool_calls=tool_calls,
