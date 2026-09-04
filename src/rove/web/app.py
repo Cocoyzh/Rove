@@ -69,7 +69,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/sessions")
     def list_sessions():
-        return session_manager.list_sessions()
+        sessions = session_manager.list_sessions()
+        if not sessions:
+            new_s = session_manager.create_session("新会话")
+            return [new_s]
+        return sessions
 
     @app.post("/api/sessions")
     def create_session(req: CreateSessionRequest):
@@ -94,6 +98,8 @@ def create_app() -> FastAPI:
         ok = session_manager.delete_session(session_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Session not found")
+        if len(session_manager.list_sessions()) == 0:
+            session_manager.create_session("新会话")
         return {"status": "ok"}
 
     # ==================== 协同与任务看板接口 ====================

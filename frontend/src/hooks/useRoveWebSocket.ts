@@ -42,125 +42,140 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     const wsUrl = `${protocol}//${host}/ws/${sessionId}`;
 
     let isCleanedUp = false;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    ws.onopen = () => {
+    const connect = () => {
       if (isCleanedUp) return;
-      setIsConnected(true);
-      resetStreamingState();
-    };
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        switch (data.type) {
-          case 'history':
-            setMessages(data.messages || []);
-            break;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-          case 'token':
-            setIsRunning(true);
-            setCurrentStreamingText((prev) => prev + data.content);
-            break;
+      ws.onopen = () => {
+        if (isCleanedUp) return;
+        setIsConnected(true);
+        resetStreamingState();
+      };
 
-          case 'tool_start':
-            setIsRunning(true);
-            setActiveToolSteps((prev) => [
-              ...prev,
-              {
-                tool_id: data.tool_id,
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          switch (data.type) {
+            case 'history':
+              setMessages(data.messages || []);
+              break;
+
+            case 'token':
+              setIsRunning(true);
+              setCurrentStreamingText((prev) => prev + data.content);
+              break;
+
+            case 'tool_start':
+              setIsRunning(true);
+              setActiveToolSteps((prev) => [
+                ...prev,
+                {
+                  tool_id: data.tool_id,
+                  tool_name: data.tool_name,
+                  tool_args: data.tool_args,
+                  status: 'running',
+                },
+              ]);
+              break;
+
+            case 'tool_end':
+              setActiveToolSteps((prev) =>
+                prev.map((step) =>
+                  step.tool_id === data.tool_id
+                    ? {
+                        ...step,
+                        output: data.output,
+                        is_error: data.is_error,
+                        cost_ms: data.cost_ms,
+                        status: data.is_error ? 'error' : 'completed',
+                      }
+                    : step
+                )
+              );
+              break;
+
+            case 'approval_required':
+              setPendingApproval({
+                approval_id: data.approval_id,
                 tool_name: data.tool_name,
-                tool_args: data.tool_args,
-                status: 'running',
-              },
-            ]);
-            break;
+                arguments: data.arguments,
+                reason: data.reason,
+              });
+              break;
 
-          case 'tool_end':
-            setActiveToolSteps((prev) =>
-              prev.map((step) =>
-                step.tool_id === data.tool_id
-                  ? {
-                      ...step,
-                      output: data.output,
-                      is_error: data.is_error,
-                      cost_ms: data.cost_ms,
-                      status: data.is_error ? 'error' : 'completed',
-                    }
-                  : step
-              )
-            );
-            break;
+            case 'error':
+              setIsRunning(false);
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: 'assistant',
+                  content: `⚠️ **模型服务连接或执行异常**\n\n\`\`\`text\n${data.error || 'Unknown error'}\n\`\`\`\n\n> 💡 **排查建议**：\n> 1. 检查根目录下 \`.env\` 的 \`LLM_API_KEY\`、\`LLM_BASE_URL\`、\`LLM_MODEL_ID\`。\n> 2. 检查代理与网络是否能正常访问模型端点。`,
+                },
+              ]);
+              break;
 
-          case 'approval_required':
-            setPendingApproval({
-              approval_id: data.approval_id,
-              tool_name: data.tool_name,
-              arguments: data.arguments,
-              reason: data.reason,
-            });
-            break;
+            case 'done':
+              setIsRunning(false);
+              setCurrentStreamingText('');
+              setActiveToolSteps([]);
+              setPendingApproval(null);
+              // 重新请求获取完整历史
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'get_history' }));
+              }
+              if (onSessionUpdatedRef.current) {
+                onSessionUpdatedRef.current();
+              }
+              break;
 
-          case 'error':
-            setIsRunning(false);
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: 'assistant',
-                content: `⚠️ **模型服务连接或执行异常**\n\n\`\`\`text\n${data.error || 'Unknown error'}\n\`\`\`\n\n> 💡 **排查建议**：\n> 1. 检查根目录下 \`.env\` 的 \`LLM_API_KEY\`、\`LLM_BASE_URL\`、\`LLM_MODEL_ID\`。\n> 2. 检查代理与网络是否能正常访问模型端点。`,
-              },
-            ]);
-            break;
+            case 'compact_done':
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'get_history' }));
+              }
+              if (onSessionUpdatedRef.current) {
+                onSessionUpdatedRef.current();
+              }
+              break;
 
-          case 'done':
-            setIsRunning(false);
-            setCurrentStreamingText('');
-            setActiveToolSteps([]);
-            setPendingApproval(null);
-            // 重新请求获取完整历史
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'get_history' }));
-            }
-            if (onSessionUpdatedRef.current) {
-              onSessionUpdatedRef.current();
-            }
-            break;
-
-          case 'compact_done':
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'get_history' }));
-            }
-            if (onSessionUpdatedRef.current) {
-              onSessionUpdatedRef.current();
-            }
-            break;
-
-          default:
-            break;
+            default:
+              break;
+          }
+        } catch (err) {
+          console.error('Failed to parse WebSocket message:', err);
         }
-      } catch (err) {
-        console.error('Failed to parse WebSocket message:', err);
-      }
+      };
+
+      ws.onclose = () => {
+        if (isCleanedUp) return;
+        setIsConnected(false);
+        setIsRunning(false);
+        // 服务端若重启或网络临时抖动，2秒后尝试自动重连
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+
+      ws.onerror = (err) => {
+        if (isCleanedUp) return;
+        console.error('WebSocket error:', err);
+        setIsConnected(false);
+        setIsRunning(false);
+      };
     };
 
-    ws.onclose = () => {
-      if (isCleanedUp) return;
-      setIsConnected(false);
-      setIsRunning(false);
-    };
-
-    ws.onerror = (err) => {
-      if (isCleanedUp) return;
-      console.error('WebSocket error:', err);
-      setIsConnected(false);
-      setIsRunning(false);
-    };
+    connect();
 
     return () => {
       isCleanedUp = true;
-      ws.close();
-      wsRef.current = null;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [sessionId, resetStreamingState]);
 

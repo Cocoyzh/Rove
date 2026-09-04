@@ -21,19 +21,12 @@ export default function App() {
         const data: SessionSummary[] = await res.json();
         setSessions(data);
         if (data.length > 0) {
-          setCurrentSessionId((prev) => prev || data[0].id);
-        } else {
-          // 初始无会话时自动创建一个，保证开箱即连，避免 OFFLINE 假死
-          const createRes = await fetch('/api/sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: '新会话' }),
+          setCurrentSessionId((prev) => {
+            if (prev && data.some((s) => s.id === prev)) {
+              return prev;
+            }
+            return data[0].id;
           });
-          if (createRes.ok) {
-            const newSession = await createRes.json();
-            setSessions([newSession]);
-            setCurrentSessionId(newSession.id);
-          }
         }
       }
     } catch (err) {
@@ -105,11 +98,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
       if (res.ok) {
-        setSessions((prev) => prev.filter((s) => s.id !== id));
-        if (currentSessionId === id) {
-          const remaining = sessions.filter((s) => s.id !== id);
-          setCurrentSessionId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        await fetchSessions();
       }
     } catch (err) {
       console.error('Failed to delete session:', err);
