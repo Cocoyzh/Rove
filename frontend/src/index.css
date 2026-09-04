@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #ffffff;
+    color: #334155;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * {
+    border-color: #e2e8f0;
+  }
+}
+
+/* 柔和细致的浅色滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* 优雅的打字机光标动画 */
+@keyframes pulseGlow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.cursor-blink {
+  display: inline-block;
+  width: 6px;
+  height: 15px;
+  background-color: #0284c7;
+  margin-left: 3px;
+  vertical-align: middle;
+  border-radius: 2px;
+  animation: pulseGlow 1s infinite;
+}

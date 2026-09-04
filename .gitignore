@@ -28,3 +28,7 @@ AGENTS.md
 
 #开发规范和文档说明
 docs/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

@@ -74,6 +74,8 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
                         "name": tc.tool_name,
                         "input": tc.tool_args,
                     })
+                if not blocks:
+                    blocks.append({"type": "text", "text": "(empty)"})
                 result.append({"role": "assistant", "content": blocks})
             else:  # role == "tool"
                 block = {"type": "tool_result",
@@ -95,7 +97,6 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
         for block in message.content:
             if block.type == "text":
                 contents.append(block.text)
-
             elif block.type == "tool_use":
                 tool_id = block.id
                 tool_name = block.name
@@ -104,10 +105,20 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
                                            tool_name=tool_name,
                                            tool_args=tool_args))
         text = "\n".join(contents)
+        if not text and not tool_calls:
+            # 兼容仅有思考块或耗尽输出 Token 的场景
+            for block in message.content:
+                if getattr(block, "type", "") == "thinking" and getattr(block, "thinking", ""):
+                    text = f"*(思考中已达Token上限)*: {block.thinking[:200]}..."
+                    break
         usage = None
         if hasattr(message, "usage"):
-            usage = Usage(input_tokens=message.usage.input_tokens,
-                          output_tokens=message.usage.output_tokens)
+            cache_read = getattr(message.usage, "cache_read_input_tokens", 0) or 0
+            cache_creation = getattr(message.usage, "cache_creation_input_tokens", 0) or 0
+            raw_input = getattr(message.usage, "input_tokens", 0) or 0
+            total_input = raw_input + cache_read + cache_creation
+            usage = Usage(input_tokens=total_input,
+                          output_tokens=getattr(message.usage, "output_tokens", 0) or 0)
         return LLMResponse(
             content=text,
             tool_calls=tool_calls,

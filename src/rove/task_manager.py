@@ -15,7 +15,7 @@ import threading
 class TaskManager:
     def __init__(self, task_dir):
         self.dir = task_dir
-        self.dir.mkdir(exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
         self._next_id = self._max_id() + 1
         self._claim_lock = threading.Lock()
 
@@ -72,14 +72,22 @@ class TaskManager:
         self._save(task)
         return json.dumps(task, indent=2, ensure_ascii=False)
 
-    def list_all(self) -> str:
+    def get_all_tasks(self) -> list[dict]:
+        self.dir.mkdir(parents=True, exist_ok=True)
         tasks = []
         files = sorted(
             self.dir.glob("task_*.json"),
             key=lambda f: int(f.stem.split("_")[1])
         )
         for f in files:
-            tasks.append(json.loads(f.read_text()))
+            try:
+                tasks.append(json.loads(f.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+        return tasks
+
+    def list_all(self) -> str:
+        tasks = self.get_all_tasks()
         if not tasks:
             return "No tasks."
         lines = []
@@ -90,7 +98,7 @@ class TaskManager:
         return "\n".join(lines)
 
     def scan_unclaimed_tasks(self) -> list:
-        self.dir.mkdir(exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
         unclaimed = []
         for f in self.dir.glob("task_*.json"):
             task = json.loads(f.read_text())

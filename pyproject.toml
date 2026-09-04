@@ -13,13 +13,20 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "PyYAML>=6.0.0",
     "rich>=13.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.24.0",
+]
 
 [project.scripts]
 rove = "rove.main:main"
+rove-web = "rove.web.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
