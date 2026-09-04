@@ -6,6 +6,7 @@ import { groupMessagesIntoTurns } from '../utils/turnGrouper';
 
 interface ChatAreaProps {
   sessionTitle: string;
+  hasActiveSession?: boolean;
   isConnected: boolean;
   messages: ChatMessage[];
   currentStreamingText: string;
@@ -23,6 +24,7 @@ interface ChatAreaProps {
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   sessionTitle,
+  hasActiveSession = true,
   isConnected,
   messages,
   currentStreamingText,
@@ -97,17 +99,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
 
           <span className="font-medium text-sm text-slate-800 truncate max-w-sm">
-            {sessionTitle || '新会话'}
+            {hasActiveSession ? (sessionTitle || '新会话') : '新会话'}
           </span>
 
           <div className="flex items-center space-x-1.5 text-xs">
             <span
               className={`w-2 h-2 rounded-full ${
-                isConnected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-rose-500'
+                isConnected
+                  ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]'
+                  : hasActiveSession
+                  ? 'bg-rose-500'
+                  : 'bg-emerald-400/80'
               }`}
             />
             <span className="text-[11px] text-slate-400 font-medium">
-              {isConnected ? '在线就绪' : '连接断开'}
+              {isConnected ? '在线就绪' : hasActiveSession ? '连接断开' : '等待开启'}
             </span>
           </div>
         </div>
@@ -190,9 +196,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             placeholder={
               isConnected
                 ? '给 Rove 发送消息... (Enter 发送, Shift+Enter 换行)'
-                : '正在连接服务中...'
+                : hasActiveSession
+                ? '正在连接服务中...'
+                : '给 Rove 发送消息，将自动开启新会话... (Enter 发送)'
             }
-            disabled={!isConnected}
+            disabled={isRunning || (!isConnected && hasActiveSession)}
             rows={1}
             className="w-full bg-transparent px-4 pt-3.5 pb-12 text-sm text-slate-800 placeholder-slate-400 resize-none outline-none font-sans"
           />
@@ -203,9 +211,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </span>
             <button
               onClick={handleSend}
-              disabled={!input.trim() || isRunning || !isConnected}
+              disabled={!input.trim() || isRunning || (!isConnected && hasActiveSession)}
               className={`p-2 rounded-xl transition-all ${
-                input.trim() && !isRunning && isConnected
+                input.trim() && !isRunning && (isConnected || !hasActiveSession)
                   ? 'bg-sky-600 text-white hover:bg-sky-500 shadow-sm'
                   : 'bg-slate-100 text-slate-300 cursor-not-allowed'
               }`}

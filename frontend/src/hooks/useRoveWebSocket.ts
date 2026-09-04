@@ -15,6 +15,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
   const [isRunning, setIsRunning] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const pendingQueryRef = useRef<string | null>(null);
   const onSessionUpdatedRef = useRef(onSessionUpdated);
   useEffect(() => {
     onSessionUpdatedRef.current = onSessionUpdated;
@@ -54,6 +55,15 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
         if (isCleanedUp) return;
         setIsConnected(true);
         resetStreamingState();
+
+        // 若有待发送的首次消息，在连接建立完成后立即发出
+        if (pendingQueryRef.current) {
+          const q = pendingQueryRef.current;
+          pendingQueryRef.current = null;
+          setMessages([{ role: 'user', content: q }]);
+          setIsRunning(true);
+          ws.send(JSON.stringify({ type: 'chat', query: q }));
+        }
       };
 
       ws.onmessage = (event) => {
@@ -217,6 +227,10 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     return true;
   }, []);
 
+  const queueInitialMessage = useCallback((query: string) => {
+    pendingQueryRef.current = query;
+  }, []);
+
   return {
     isConnected,
     messages,
@@ -227,5 +241,6 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     sendMessage,
     sendApproval,
     sendCompact,
+    queueInitialMessage,
   };
 }

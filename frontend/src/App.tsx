@@ -72,6 +72,7 @@ export default function App() {
     sendMessage,
     sendApproval,
     sendCompact,
+    queueInitialMessage,
   } = useRoveWebSocket({
     sessionId: currentSessionId,
     onSessionUpdated: handleSessionUpdated,
@@ -95,12 +96,42 @@ export default function App() {
     }
   };
 
-  // 删除会话
+  // 统一消息发送处理：无会话时自动新建会话并无感发送
+  const handleSendMessage = async (query: string) => {
+    if (!currentSessionId) {
+      try {
+        const title = query.slice(0, 20).trim() || '新会话';
+        const res = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        });
+        if (res.ok) {
+          const newSession = await res.json();
+          queueInitialMessage(query);
+          setSessions((prev) => [newSession, ...prev]);
+          setCurrentSessionId(newSession.id);
+        }
+      } catch (err) {
+        console.error('Failed to auto create session on send:', err);
+      }
+    } else {
+      sendMessage(query);
+    }
+  };
+
+  // 删除会话（支持彻底清空所有会话）
   const handleDeleteSession = async (id: string) => {
     try {
       const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
       if (res.ok) {
-        await fetchSessions();
+        setSessions((prev) => {
+          const next = prev.filter((s) => s.id !== id);
+          if (currentSessionId === id) {
+            setCurrentSessionId(next.length > 0 ? next[0].id : null);
+          }
+          return next;
+        });
       }
     } catch (err) {
       console.error('Failed to delete session:', err);
@@ -146,13 +177,14 @@ export default function App() {
       {/* 2. 中间主对话控制台 */}
       <ChatArea
         sessionTitle={currentSession?.title || '新会话'}
+        hasActiveSession={!!currentSessionId}
         isConnected={isConnected}
         messages={messages}
         currentStreamingText={currentStreamingText}
         activeToolSteps={activeToolSteps}
         pendingApproval={pendingApproval}
         isRunning={isRunning}
-        onSendMessage={sendMessage}
+        onSendMessage={handleSendMessage}
         onSendApproval={sendApproval}
         isSidebarCollapsed={isSidebarCollapsed}
         onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}

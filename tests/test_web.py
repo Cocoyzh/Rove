@@ -226,11 +226,18 @@ def test_permission_hard_deny(tmp_path):
     assert "Blocked by hard deny rule" in reason2
 
 
-def test_zero_session_auto_recovery():
+def test_zero_session_support():
     client = TestClient(app)
-    # 获取会话列表，始终保底返回至少 1 个可用会话
+    # 获取会话列表接口正常响应
     res = client.get("/api/sessions")
     assert res.status_code == 200
     sessions = res.json()
-    assert len(sessions) >= 1
-    assert "id" in sessions[0]
+    assert isinstance(sessions, list)
+
+    # 动态创建会话接口正常响应
+    create_res = client.post("/api/sessions", json={"title": "零会话按需新建"})
+    assert create_res.status_code == 200
+    new_s = create_res.json()
+    assert new_s["title"] == "零会话按需新建"
+    # 清理创建的会话
+    client.delete(f"/api/sessions/{new_s['id']}")
