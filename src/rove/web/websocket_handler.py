@@ -9,16 +9,12 @@ from rove.task_manager import TaskManager
 from rove.tools.agent_teams import TeammateManger
 from rove.permissions import PermissionPolicy
 from rove.tool_registry import ToolRegistry
+from rove.tools.todo import build_todo_tool
 from rove.tools.tools_setup import (
-    todo_tool,
     execute_python_tool,
     run_bg_tool,
     check_bg_tool,
     build_skill_tool,
-    build_create_task_tool,
-    build_update_task_tool,
-    build_get_task_tool,
-    build_list_all_task_tool,
     build_team_tools,
     FILE_TOOLS,
 )
@@ -58,15 +54,11 @@ class SessionConnection:
             self.approval_mgr.request,
         )
         self.registry.register_many([
-            todo_tool,
+            build_todo_tool(self.task_manager),
             execute_python_tool,
             *FILE_TOOLS,
             *build_team_tools(self.team_manager),
             build_skill_tool(self.app_state.skill_loader),
-            build_create_task_tool(self.task_manager),
-            build_update_task_tool(self.task_manager),
-            build_get_task_tool(self.task_manager),
-            build_list_all_task_tool(self.task_manager),
             run_bg_tool,
             check_bg_tool,
         ])
