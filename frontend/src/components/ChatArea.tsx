@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft, Compass } from 'lucide-react';
+import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft } from 'lucide-react';
 import { ChatMessage, ToolStep, ApprovalRequest } from '../types/rove';
 import { MessageItem } from './MessageItem';
 import { groupMessagesIntoTurns } from '../utils/turnGrouper';
@@ -140,9 +140,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       >
         {messages.length === 0 && !currentStreamingText && activeToolSteps.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-6 max-w-lg mx-auto py-12">
-            <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center text-sky-600 shadow-sm">
-              <Compass size={24} />
-            </div>
+            <img src="/logo.svg" alt="Rove" className="w-14 h-14 shadow-sm" />
             <div>
               <h2 className="text-xl font-semibold text-slate-800 tracking-tight">
                 欢迎使用 Rove 智能体工作台

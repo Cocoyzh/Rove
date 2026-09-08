@@ -11,7 +11,6 @@ import {
   Check,
   X,
   Edit2,
-  Compass,
 } from 'lucide-react';
 import { SessionSummary, SystemStatus } from '../types/rove';
 
@@ -100,9 +99,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-3.5 border-b border-slate-200/80">
           <div className="flex items-center justify-between mb-3 px-1">
             <div className="flex items-center space-x-2.5">
-              <div className="w-7 h-7 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-sky-600 shadow-sm">
-                <Compass size={17} />
-              </div>
+              <img src="/logo.svg" alt="Rove" className="w-8 h-8 shadow-sm" />
               <div className="flex items-baseline space-x-1.5">
                 <span className="font-semibold text-slate-900 text-sm tracking-tight">
                   Rove

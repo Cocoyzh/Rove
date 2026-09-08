@@ -1,8 +1,14 @@
+<div align="center">
+
+<img src="assets/logo/logo.svg" width="150" alt="Rove logo" />
+
 # Rove
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![LLM Anthropic](https://img.shields.io/badge/LLM-Anthropic-191919)
 ![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-4C1)
+
+</div>
 
 Rove 是一个运行在终端中的多智能体编码框架。它由 Lead Agent 负责任务规划、工具调用和结果验证，并可按需派生后台 Teammate 并行处理子任务。
 

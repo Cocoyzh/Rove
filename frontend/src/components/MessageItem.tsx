@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { User, Copy, Check, Compass } from 'lucide-react';
+import { User, Copy, Check } from 'lucide-react';
 import { ChatTurn } from '../types/rove';
 import { ToolCard } from './ToolCard';
 
@@ -110,15 +110,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({ turn }) => {
     <div className={`flex w-full my-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`flex max-w-[88%] md:max-w-[80%] ${isUser ? 'flex-row-reverse' : 'flex-row'} items-start space-x-3`}>
         {/* 头像 */}
-        <div
-          className={`w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 select-none shadow-xs ${
-            isUser
-              ? 'bg-slate-100 text-slate-600 ml-3 border border-slate-200'
-              : 'bg-sky-50 text-sky-600 mr-3 border border-sky-100'
-          }`}
-        >
-          {isUser ? <User size={16} /> : <Compass size={17} />}
-        </div>
+        {isUser ? (
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 select-none shadow-xs bg-slate-100 text-slate-600 ml-3 border border-slate-200">
+            <User size={16} />
+          </div>
+        ) : (
+          <img
+            src="/logo.svg"
+            alt="Rove"
+            className="w-8 h-8 rounded-xl flex-shrink-0 mt-0.5 mr-3 select-none shadow-xs"
+          />
+        )}
 
         {/* 气泡内容 */}
         <div
