@@ -1,5 +1,7 @@
 from pathlib import Path
+import json
 import os
+import re
 import subprocess
 from ..tool_registry import Tool
 from rove.paths import WORKSPACE_ROOT, AGENT_TMP_DIR
@@ -56,12 +58,144 @@ def _run_bash(command: str, timeout: int = None) -> str:
 
 def _run_read(path: str, limit: int = None) -> str:
     try:
-        lines = _safe_path(path).read_text().splitlines()
+        fp = _safe_path(path)
+        ftype = sniff_file_type(fp)
+
+        if ftype == "pdf":
+            return _extract_pdf_text(fp)
+        if ftype == "rtf":
+            # RTF 富文本（如 TextEdit 保存的 .txt 实为 RTF）：剥离控制字取正文
+            text = _extract_rtf_text(fp.read_bytes())
+        elif ftype == "utf16-text":
+            text = fp.read_text(encoding="utf-16")
+        elif ftype == "utf8-sig-text":
+            text = fp.read_text(encoding="utf-8-sig")
+        elif ftype in ("binary", "zip", "gzip", "png", "jpeg", "gif"):
+            return f"Error: {path} appears to be binary content (sniffed as {ftype}); read_file only handles text. Use bash with a dedicated tool if you really need it."
+        else:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+
+        lines = text.splitlines()
         if limit and len(lines) > limit:
             lines = lines[:limit] + [f"... ({len(lines) - limit} more)"]
         return "\n".join(lines)[:50000]
     except Exception as e:
         return f"Error: {e}"
+
+
+def sniff_file_type(path: Path) -> str:
+    """轻量文件类型嗅探：基于魔数字节而非扩展名判断（Issue #8），
+    避免 TextEdit 保存的 RTF 伪装成 .txt 被当纯文本误读。"""
+    try:
+        with path.open("rb") as f:
+            head = f.read(8192)
+    except Exception:
+        return "unknown"
+
+    if head.startswith(b"{\\rtf1"):
+        return "rtf"
+    if head.startswith(b"%PDF-"):
+        return "pdf"
+    if head.startswith(b"PK\x03\x04"):
+        return "zip"
+    if head.startswith(b"\x1f\x8b"):
+        return "gzip"
+    if head.startswith(b"\x89PNG"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if head.startswith(b"GIF8"):
+        return "gif"
+    if head.startswith((b"\xfe\xff", b"\xff\xfe")):
+        return "utf16-text"
+    if head.startswith(b"\xef\xbb\xbf"):
+        return "utf8-sig-text"
+    if b"\x00" in head:
+        return "binary"
+    return "text"
+
+
+def _extract_rtf_text(data: bytes) -> str:
+    """最小化 RTF 转纯文本：处理 \\uN 与 \\'hh 转义、\\par 段落，
+    剥离其余控制字与花括号分组，保留文本内容。"""
+    text = data.decode("ascii", errors="ignore")
+    text = re.sub(r"\\u(-?\d+)\s?\??", lambda m: chr(int(m.group(1)) & 0xFFFF), text)
+    text = re.sub(r"\\'([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), text)
+    text = re.sub(r"\\par[d]?\b", "\n", text)
+    text = re.sub(r"\\[a-zA-Z]+-?\d*\s?", "", text)
+    text = text.replace("{", "").replace("}", "")
+    return text.replace("\\{", "{").replace("\\}", "}").replace("\\\\", "\\")
+
+
+def _extract_pdf_text(fp: Path) -> str:
+    """PDF 轻量文本提取：检测到 pypdf/PyPDF2 时使用，未安装则返回
+    明确指引，不引入硬依赖（Issue #8）。"""
+    try:
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            from PyPDF2 import PdfReader
+    except ImportError:
+        return (
+            f"Info: {fp.name} is a PDF file, but no PDF text extraction library is installed.\n"
+            "Options:\n"
+            "1. pip install pypdf, then retry read_file;\n"
+            "2. run `pdftotext` via bash if the binary is available."
+        )
+
+    try:
+        reader = PdfReader(str(fp))
+        pages = []
+        for i, page in enumerate(reader.pages[:50]):
+            pages.append(f"--- Page {i + 1} ---\n{(page.extract_text() or '').strip()}")
+        return "\n".join(pages)[:50000]
+    except Exception as e:
+        return f"Error: PDF extraction failed: {e}"
+
+
+def _run_read_notebook(path: str, max_output_chars: int = 2000) -> str:
+    """结构化读取 Jupyter Notebook（Issue #8）：按 cell 提取代码与
+    Markdown 源码，输出做摘要（stream/result 截断、富媒体报类型、
+    error 带异常名），无需 agent 手写解析脚本。"""
+    try:
+        fp = _safe_path(path)
+        nb = json.loads(fp.read_text(encoding="utf-8"))
+    except Exception as e:
+        return f"Error: {e}"
+
+    cells = nb.get("cells", [])
+    kernel = nb.get("metadata", {}).get("kernelspec", {}).get("name", "unknown")
+    lines = [f"Notebook: {path} ({len(cells)} cells, kernel={kernel})"]
+
+    for i, cell in enumerate(cells):
+        ctype = cell.get("cell_type", "unknown")
+        lines.append(f"\n=== Cell {i + 1} [{ctype}] ===")
+        lines.append("".join(cell.get("source", [])))
+
+        if ctype != "code":
+            continue
+
+        outputs = cell.get("outputs", [])
+        lines.append(f"--- outputs (execution_count={cell.get('execution_count')}, {len(outputs)} items) ---")
+        for out in outputs:
+            otype = out.get("output_type")
+            if otype == "stream":
+                text = "".join(out.get("text", []))
+                suffix = "..." if len(text) > max_output_chars else ""
+                lines.append(f"[stream:{out.get('name', '')}] {text[:max_output_chars]}{suffix}")
+            elif otype in ("execute_result", "display_data"):
+                data = out.get("data", {})
+                if "text/plain" in data:
+                    text = "".join(data["text/plain"])
+                    suffix = "..." if len(text) > max_output_chars else ""
+                    lines.append(f"[{otype}] {text[:max_output_chars]}{suffix}")
+                else:
+                    lines.append(f"[{otype}] rich media: {', '.join(sorted(data.keys()))}")
+            elif otype == "error":
+                lines.append(f"[error] {out.get('ename')}: {out.get('evalue')}")
+
+    return "\n".join(lines)[:50000]
+
 
 def _run_edit(path: str, old_text: str, new_text: str) -> str:
     try:
@@ -102,7 +236,7 @@ FILE_TOOLS = [
     ),
     Tool(
         name="read_file",
-        description="read file contents",
+        description="read file contents. Sniffs the real file type by magic bytes: handles RTF rich text, PDF (needs pypdf), UTF-16 text; refuses plain-binary dumps.",
         input_schema={
             "type": "object",
             "properties": {
@@ -112,6 +246,19 @@ FILE_TOOLS = [
             "required": ["path"],
         },
         handler= lambda **kw: _run_read(kw["path"], kw.get("limit"))
+    ),
+    Tool(
+        name="read_notebook",
+        description="read a Jupyter Notebook (.ipynb) structurally: cell code/markdown sources plus summarized outputs (stream text, results, errors), no parsing scripts needed.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "max_output_chars": {"type": "integer", "description": "Per-output truncation limit (default 2000)"},
+            },
+            "required": ["path"],
+        },
+        handler= lambda **kw: _run_read_notebook(kw["path"], kw.get("max_output_chars", 2000))
     ),
     Tool(
         name="write_file",
