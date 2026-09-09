@@ -55,6 +55,57 @@ class TaskManager:
                 task["blockedBy"].remove(completed_id)
                 self._save(task)
 
+    def sync_todos(self, items: list[dict]) -> list[dict]:
+        """将 todo 传入的任务项以智能 Upsert 方式同步至持久化 .tasks/task_<id>.json。
+        保留已有任务的 owner、blockedBy 等字段，兼容多 Agent 协同。
+        """
+        self.dir.mkdir(parents=True, exist_ok=True)
+        synced_tasks = []
+
+        for i, item in enumerate(items):
+            raw_id = item.get("id")
+            try:
+                task_id = int(raw_id)
+            except (ValueError, TypeError):
+                task_id = i + 1
+
+            subject = str(item.get("text") or item.get("subject", f"Task {task_id}")).strip()
+            status = str(item.get("status", "pending")).lower()
+            if status not in ["pending", "in_progress", "completed"]:
+                status = "pending"
+
+            path = self.dir / f"task_{task_id}.json"
+            if path.exists():
+                try:
+                    task = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    task = {}
+                task["id"] = task_id
+                task["subject"] = subject
+                task["status"] = status
+                task.setdefault("description", "")
+                task.setdefault("blockedBy", [])
+                task.setdefault("owner", item.get("owner", ""))
+            else:
+                task = {
+                    "id": task_id,
+                    "subject": subject,
+                    "description": item.get("description", ""),
+                    "status": status,
+                    "blockedBy": item.get("blockedBy", []),
+                    "owner": item.get("owner", ""),
+                }
+
+            if status == "completed":
+                self._clear_dependency(task_id)
+
+            self._save(task)
+            synced_tasks.append(task)
+
+            if task_id >= self._next_id:
+                self._next_id = task_id + 1
+
+        return synced_tasks
 
     def update(self, task_id: int, status: str = None, add_blocked_by: list = None,
                remove_blocked_by: list = None) -> str:

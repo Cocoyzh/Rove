@@ -51,6 +51,7 @@ class LeadAgent:
         self.messages.append(Message(role="user", content=query))
 
         rounds_since_todo = 0   # 记录多少轮没使用Todo Manager
+        reminder_cooldown = 0   # 提醒退避冷却计数
         reactive_retries = 0    # 应急压缩重试计数
         total_input_tokens = 0
         total_output_tokens = 0
@@ -119,11 +120,19 @@ class LeadAgent:
                     if tool.tool_name == "todo":
                         used_todo = True
 
-                rounds_since_todo = 0 if used_todo else rounds_since_todo + 1
-
-                if rounds_since_todo >= 3:
-                    self.messages.append(Message(role="user",
-                                                 content="<reminder>Update your todos before continuing.</reminder>"))
+                if used_todo:
+                    rounds_since_todo = 0
+                    reminder_cooldown = 0
+                else:
+                    rounds_since_todo += 1
+                    if reminder_cooldown > 0:
+                        reminder_cooldown -= 1
+                    elif rounds_since_todo >= 4:
+                        self.messages.append(Message(
+                            role="user",
+                            content="<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>"
+                        ))
+                        reminder_cooldown = 6
 
             return "Error: max_steps exceeded before the agent finished."
         finally:
