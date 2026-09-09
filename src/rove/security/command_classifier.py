@@ -271,6 +271,41 @@ class CommandClassifier:
 
         return True, ""
 
+    def is_workspace_redirection(self, command: str) -> bool:
+        """判断命令的输出重定向是否全部落在工作区内。
+
+        供 WORKSPACE 权限模式使用：仅当命令确实包含文件重定向、且不含
+        动态展开/换行、每个重定向目标都可解析为工作区内路径时返回 True。
+        """
+        if not isinstance(command, str):
+            return False
+        cmd = command.strip()
+        if not cmd:
+            return False
+        # 与 classify() 同源的防注入前置检查：动态内容无法静态判定目标
+        if any(marker in cmd for marker in ("$", "`", "\n", "\r")):
+            return False
+
+        try:
+            lexer = shlex.shlex(cmd, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            return False
+
+        found_redirect = False
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if token in {">", ">>", ">|", "&>"} and i + 1 < len(tokens):
+                if not self._check_path_bounds(tokens[i + 1])[0]:
+                    return False
+                found_redirect = True
+                i += 2
+                continue
+            i += 1
+        return found_redirect
+
     def _validate_sub_command(self, tokens: list[str]) -> tuple[bool, str]:
         if not tokens:
             return False, "Empty sub-command"

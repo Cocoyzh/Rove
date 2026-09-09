@@ -69,9 +69,11 @@ export default function App() {
     activeToolSteps,
     pendingApproval,
     isRunning,
+    approvalMode,
     sendMessage,
     sendApproval,
     sendCompact,
+    changeApprovalMode,
     queueInitialMessage,
   } = useRoveWebSocket({
     sessionId: currentSessionId,
@@ -184,6 +186,8 @@ export default function App() {
         activeToolSteps={activeToolSteps}
         pendingApproval={pendingApproval}
         isRunning={isRunning}
+        approvalMode={approvalMode}
+        onChangeApprovalMode={changeApprovalMode}
         onSendMessage={handleSendMessage}
         onSendApproval={sendApproval}
         isSidebarCollapsed={isSidebarCollapsed}

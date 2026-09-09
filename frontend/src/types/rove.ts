@@ -44,6 +44,15 @@ export interface ApprovalRequest {
   available_choices?: string[];
 }
 
+// 全局三档权限审批模式（与后端 ApprovalMode 对齐）
+export type ApprovalMode = 'strict' | 'workspace' | 'full_access';
+
+export const APPROVAL_MODE_LABELS: Record<ApprovalMode, string> = {
+  strict: '严格审查',
+  workspace: '工作区信任',
+  full_access: '完全访问',
+};
+
 export interface SessionSummary {
   id: string;
   title: string;

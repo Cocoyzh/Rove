@@ -20,6 +20,19 @@ class PermissionDecision(str, Enum):
     DENY = "deny"
 
 
+class ApprovalMode(str, Enum):
+    """全局三档权限审批模式（Issue #5 Phase 4）。
+
+    安全底线在任何模式下都成立：硬拒绝命令与跨工作区文件写入一律 DENY。
+    """
+    STRICT = "strict"            # 严格审查：只读白名单自动放行，其余一律审批
+    WORKSPACE = "workspace"      # 工作区信任：工作区内写入/重定向自动放行，越界才审批
+    FULL_ACCESS = "full_access"  # 完全访问：除安全底线外全自动（仅建议隔离环境使用）
+
+
+VALID_APPROVAL_MODES = {mode.value: mode for mode in ApprovalMode}
+
+
 class ApprovalManager:
     def __init__(self, store: SessionApprovalStore | None = None) -> None:
         self._store = store if store is not None else SessionApprovalStore()
@@ -151,9 +164,13 @@ class PermissionPolicy:
         "spawn_teammate",
     }
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, approval_mode: ApprovalMode = ApprovalMode.WORKSPACE):
         self._workspace = workspace.resolve()
         self._classifier = CommandClassifier(self._workspace)
+        self.approval_mode = approval_mode
+
+    def set_approval_mode(self, mode: ApprovalMode) -> None:
+        self.approval_mode = mode
 
     def decide(
         self,
@@ -168,12 +185,22 @@ class PermissionPolicy:
         if path_reason:
             return PermissionDecision.DENY, path_reason
 
+        if self.approval_mode is ApprovalMode.FULL_ACCESS:
+            # 安全底线（硬拒绝 + 文件越界）已在上方无条件拦截
+            return PermissionDecision.ALLOW, f"Full access mode: {tool_name} auto-approved"
+
         if tool_name in {"bash", "run_background"}:
             command = arguments.get("command", "")
             is_safe, reason = self._classifier.classify(command)
             if is_safe:
                 return PermissionDecision.ALLOW, "Safe read-only command"
+            if self.approval_mode is ApprovalMode.WORKSPACE and self._classifier.is_workspace_redirection(command):
+                return PermissionDecision.ALLOW, "Workspace mode: in-workspace redirection auto-approved"
             return PermissionDecision.ASK, f"Bash command requires approval: {reason}"
+
+        if self.approval_mode is ApprovalMode.WORKSPACE and tool_name in {"write_file", "edit_file"}:
+            # 跨工作区写入已在 _check_workspace_path 无条件 DENY，走到这里的必然在工作区内
+            return PermissionDecision.ALLOW, "Workspace mode: in-workspace file write auto-approved"
 
         if tool_name in self._ASK_TOOLS:
             return PermissionDecision.ASK, "This operation requires user approval"

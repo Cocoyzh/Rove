@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from rove.permissions import (
     ApprovalManager,
+    ApprovalMode,
     PermissionDecision,
     PermissionPolicy,
 )
@@ -268,6 +269,91 @@ class TestPermissionPolicy(unittest.TestCase):
 
         decision, reason = self.policy.decide("bash", {"command": "cat .env"})
         self.assertEqual(decision, PermissionDecision.ASK)
+
+
+class TestTieredApprovalModes(unittest.TestCase):
+    """三档权限审批模式（Issue #5 Phase 4）：安全底线在任何模式下不变"""
+
+    def setUp(self):
+        self.workspace = Path(__file__).parent.parent.resolve()
+        self.policy = PermissionPolicy(self.workspace, ApprovalMode.WORKSPACE)
+
+    def _decide(self, tool, args):
+        return self.policy.decide(tool, args)
+
+    def test_workspace_mode_auto_allows_in_workspace_writes(self):
+        decision, _ = self._decide("write_file", {"path": "src/out.py", "content": "x"})
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+
+        decision, _ = self._decide("edit_file", {"path": "README.md", "old_text": "a", "new_text": "b"})
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+
+    def test_workspace_mode_allows_in_workspace_redirection(self):
+        decision, reason = self._decide("bash", {"command": "cat data.csv > tmp/analysis/out.txt"})
+        self.assertEqual(decision, PermissionDecision.ALLOW, reason)
+
+        # 越界重定向必须仍然弹窗审批
+        decision, _ = self._decide("bash", {"command": "cat data.csv > /tmp/evil.txt"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+        # 动态展开无法静态判定，不自动放行
+        decision, _ = self._decide("bash", {"command": "cat a > $HOME/out.txt"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+    def test_workspace_mode_still_asks_for_others(self):
+        decision, _ = self._decide("bash", {"command": "pytest tests/test.py"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+        decision, _ = self._decide("execute_python", {"code": "print(1)"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+    def test_strict_mode_matches_legacy_behavior(self):
+        self.policy.set_approval_mode(ApprovalMode.STRICT)
+
+        decision, _ = self._decide("write_file", {"path": "src/out.py", "content": "x"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+        decision, _ = self._decide("bash", {"command": "cat a > tmp/out.txt"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+        # 只读白名单在严格模式下依旧自动放行
+        decision, reason = self._decide("bash", {"command": "cat README.md"})
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+
+    def test_full_access_mode_auto_allows_but_hard_deny_stays(self):
+        self.policy.set_approval_mode(ApprovalMode.FULL_ACCESS)
+
+        decision, _ = self._decide("bash", {"command": "pytest tests/test.py"})
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+
+        decision, _ = self._decide("execute_python", {"code": "print(1)"})
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+
+        # 底线 1：硬拒绝命令不放行
+        decision, reason = self._decide("bash", {"command": "sudo rm -rf /"})
+        self.assertEqual(decision, PermissionDecision.DENY)
+
+        # 底线 2：跨工作区文件写入不放行
+        decision, reason = self._decide("write_file", {"path": "../secret.txt", "content": "x"})
+        self.assertEqual(decision, PermissionDecision.DENY)
+        self.assertIn("escapes workspace", reason)
+
+    def test_mode_runtime_switch(self):
+        self.assertEqual(self.policy.approval_mode, ApprovalMode.WORKSPACE)
+
+        self.policy.set_approval_mode(ApprovalMode.STRICT)
+        decision, _ = self._decide("write_file", {"path": "a.txt", "content": "x"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+        self.policy.set_approval_mode(ApprovalMode.FULL_ACCESS)
+        decision, _ = self._decide("write_file", {"path": "a.txt", "content": "x"})
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+
+    def test_readonly_safe_commands_allow_in_all_modes(self):
+        for mode in ApprovalMode:
+            self.policy.set_approval_mode(mode)
+            decision, _ = self._decide("bash", {"command": "git status"})
+            self.assertEqual(decision, PermissionDecision.ALLOW, f"mode={mode}")
 
 
 class TestApprovalManagerInteraction(unittest.TestCase):
