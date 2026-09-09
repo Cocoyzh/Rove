@@ -349,6 +349,34 @@ class TestWebApprovalManager(unittest.TestCase):
         # Next call with pytest should be auto-approved without creating pending request
         self.assertTrue(mgr.request("bash", {"command": "pytest tests/test_another.py"}, "test"))
 
+    def test_web_cancel_all_releases_pending_requests(self):
+        received_events = []
+        mgr = WebApprovalManager(on_approval_needed=lambda data: received_events.append(data))
+
+        import threading
+        import time
+
+        results = {}
+
+        def worker():
+            results["approved"] = mgr.request("bash", {"command": "pytest slow.py"}, "run")
+
+        t = threading.Thread(target=worker)
+        t.start()
+        for _ in range(50):
+            if received_events:
+                break
+            time.sleep(0.02)
+        self.assertEqual(len(received_events), 1)
+
+        # 会话关闭：一次性取消所有挂起请求，等待线程立即以拒绝返回
+        cancelled = mgr.cancel_all()
+        self.assertEqual(cancelled, 1)
+
+        t.join(timeout=2)
+        self.assertFalse(t.is_alive(), "等待线程应被唤醒退出")
+        self.assertFalse(results["approved"])
+
 
 if __name__ == "__main__":
     unittest.main()

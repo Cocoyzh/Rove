@@ -107,10 +107,7 @@ class SessionConnection:
         self._is_closed = True
         self.sender_task.cancel()
         # 兜底释放所有被挂起的审批等待，避免死锁后台工作线程
-        with self.approval_mgr._lock:
-            for req in self.approval_mgr._pending_requests.values():
-                req["decision"] = "n"
-                req["event"].set()
+        self.approval_mgr.cancel_all()
 
     def _on_token(self, token: str) -> None:
         self._send_json_threadsafe({
