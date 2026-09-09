@@ -212,6 +212,35 @@ def test_l2_micro_compact_anti_loop_and_threshold():
         assert tool_msgs[i].content == f"Normal output {i}"
 
 
+def test_anchor_excludes_synthetic_system_messages():
+    """L1 锚点只保护真实用户指令：<reminder>/<inbox>/<background-results>
+    等系统注入的合成 user 消息不钉，随中段一起被剪除。"""
+    messages = [Message(role="user", content="启动任务")]
+    for i in range(1, 40):
+        if i == 10:
+            messages.append(Message(role="user", content="<reminder>Update your todos.</reminder>"))
+        elif i == 20:
+            messages.append(Message(role="user", content="<inbox>[]</inbox>"))
+        elif i == 30:
+            # 中段的真实用户需求必须保留
+            messages.append(Message(role="user", content="重要！需求变更：全部换成 SQLite"))
+        else:
+            messages.append(Message(
+                role="assistant",
+                content=f"step {i}",
+                tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="t", tool_args={})]
+            ))
+            messages.append(Message(role="tool", tool_call_id=f"c_{i}", content=f"out {i}"))
+
+    messages.append(Message(role="user", content="收尾"))
+    snipped = snip_compact(messages)
+
+    user_contents = [m.content for m in snipped if m.role == "user"]
+    assert any("需求变更：全部换成 SQLite" in c for c in user_contents), "真实用户指令必须钉住"
+    assert all("<reminder>" not in c for c in user_contents), "合成提醒不应被钉为锚点"
+    assert all("<inbox>" not in c for c in user_contents), "合成收件箱消息不应被钉为锚点"
+
+
 def test_l2_persists_oversized_old_results(tmp_path):
     """L2 对滑出保留窗口的超长输出应落盘持久化并保留路径指针，
     全文可回溯，且已持久化的消息不会被二度处理。"""

@@ -218,11 +218,19 @@ def micro_compact(messages: list[Message], tool_results_dir: Path | None = None)
 
 
 # ---------------- L1 -------------------
+# 不参与锚点保护的前缀：压缩占位/摘要 + 系统注入的合成 user 消息
+ANCHOR_EXCLUDED_PREFIXES = (
+    "[已压缩", "[对话已压缩]", "[应急压缩]",
+    "<reminder>", "<inbox>", "<background-results>",
+)
+
+
 def _is_user_anchor(msg: Message) -> bool:
+    """真实用户指令享有免剪锚点保护；压缩占位符与系统注入的合成消息不钉。"""
     if msg.role != "user" or not msg.content:
         return False
     text = msg.content.strip()
-    return not text.startswith(("[已压缩", "[对话已压缩]", "[应急压缩]"))
+    return not text.startswith(ANCHOR_EXCLUDED_PREFIXES)
 
 
 def snip_compact(messages: list[Message]) -> list[Message]:
