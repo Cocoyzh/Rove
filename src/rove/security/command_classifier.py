@@ -190,6 +190,11 @@ class CommandClassifier:
         if "${" in cmd:
             return False, "Shell parameter expansion (${...}) detected"
 
+        # shlex treats raw newlines as whitespace, so everything after a newline
+        # would be merged into the first sub-command and bypass chain-splitting
+        if "\n" in cmd or "\r" in cmd:
+            return False, "Multi-line commands are not auto-approved (newline may hide extra commands)"
+
         # Tokenize with punctuation support
         try:
             lexer = shlex.shlex(cmd, punctuation_chars=True)
