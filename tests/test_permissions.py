@@ -216,6 +216,18 @@ class TestApprovalStore(unittest.TestCase):
         store.add_tool_rule("edit_file")
         self.assertTrue(store.is_approved("edit_file", {"path": "any_file.py", "content": "..."}))
 
+    def test_path_rule_preserves_dotfile_names(self):
+        store = SessionApprovalStore()
+
+        # 点文件名不能被按字符集剥前缀，".env" 与 "env" 必须是两条不同路径
+        store.add_path_rule("write_file", ".env")
+        self.assertTrue(store.is_approved("write_file", {"path": ".env"}))
+        self.assertFalse(store.is_approved("write_file", {"path": "env"}))
+
+        # "./" 前缀折叠仍然生效
+        store.add_path_rule("edit_file", "./src/foo.py")
+        self.assertTrue(store.is_approved("edit_file", {"path": "src/foo.py"}))
+
 
 class TestPermissionPolicy(unittest.TestCase):
     def setUp(self):
