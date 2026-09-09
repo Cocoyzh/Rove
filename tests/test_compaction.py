@@ -287,6 +287,32 @@ def test_adaptive_watermarks_1m_vs_200k():
     assert any("[Output truncated" in (m.content or "") for m in result_200k)
 
 
+def test_l4_summary_covers_head_and_tail():
+    """L4 摘要输入超预算时必须头尾采样：最初的用户目标与最新的中途约束
+    都必须进入摘要 prompt，而不是只截取开头 80k 字符。"""
+    recorded = {}
+
+    class RecordingLLM(DummyLLM):
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            recorded["prompt"] = request.messages[0].content
+            return super().complete(request)
+
+    llm = RecordingLLM()
+    messages = [Message(role="user", content="最早的需求：EARLY_GOAL_MARKER 排查内存泄漏")]
+    # 构造远超 80k 字符预算的中段历史（约 240 条 × 6k 字符）
+    for i in range(120):
+        messages.append(Message(role="assistant", content=f"step {i}: " + "x" * 3000))
+        messages.append(Message(role="tool", tool_call_id=f"t_{i}", content=f"data {i}: " + "y" * 3000))
+    messages.append(Message(role="user", content="最新的约束：LATE_CONSTRAINT_MARKER 只改缓存层"))
+
+    compact_history(llm, messages)
+
+    prompt = recorded["prompt"]
+    assert "EARLY_GOAL_MARKER" in prompt, "对话开头的原始目标必须进入摘要输入"
+    assert "LATE_CONSTRAINT_MARKER" in prompt, "对话末尾的最新约束必须进入摘要输入"
+    assert "中段过长已省略" in prompt
+
+
 def test_l4_compact_history_retains_tail_memory():
     """测试 L4 深度摘要压缩时，保留尾部最近 5~8 条活跃交互，防止断崖式失忆"""
     dummy_llm = DummyLLM()

@@ -38,6 +38,9 @@ L2_WATERMARK_RATIO = 0.10
 L1_WATERMARK_RATIO = 0.20
 L4_WATERMARK_RATIO = 0.40
 
+# L4 摘要输入预算（字符）
+SUMMARY_CHAR_BUDGET = 80_000
+
 # L4 摘要提示词
 SUMMARY_PROMPT = """请总结以下对话，保留关键信息：
 1. 用户的目标（分析、编码、调试等）
@@ -269,10 +272,42 @@ def _write_transcript(messages: list[Message]) -> Path:
     return path
 
 
+def _build_summary_input(messages: list[Message], budget: int = SUMMARY_CHAR_BUDGET) -> str:
+    """构建 L4 摘要输入：预算内整条消息拼接；超预算时对半保留头尾消息、
+    中段整条省略，保证摘要同时覆盖最初目标与近期进展，而不是只看到对话开头。"""
+    dumped = [json.dumps(m.to_dict(), default=str, ensure_ascii=False) for m in messages]
+    if sum(len(s) for s in dumped) <= budget:
+        return "\n".join(dumped)
+
+    half = budget // 2
+    head: list[str] = []
+    head_size = 0
+    for s in dumped:
+        if head_size + len(s) > half:
+            break
+        head.append(s)
+        head_size += len(s)
+
+    tail: list[str] = []
+    tail_size = 0
+    for s in reversed(dumped):
+        if tail_size + len(s) > half:
+            break
+        tail.append(s)
+        tail_size += len(s)
+    tail.reverse()
+
+    # 单条消息就超出预算的退化场景：回退为硬截断，保证摘要输入非空
+    if not head and not tail:
+        return "\n".join(dumped)[:budget]
+
+    omitted = len(dumped) - len(head) - len(tail)
+    return "\n".join([*head, f"...[中段过长已省略 {omitted} 条消息，完整内容见 transcript 存档]...", *tail])
+
+
 def _summarize_history(llm: BaseLLMAdapter, messages: list[Message]) -> str:
     """调 LLM 对对话历史做摘要，保留目标、发现、约束。"""
-    conversation = json.dumps([m.to_dict() for m in messages],
-                              default=str, ensure_ascii=False)[:80000]
+    conversation = _build_summary_input(messages)
     prompt = SUMMARY_PROMPT.format(conversation=conversation)
 
     request = LLMRequest(messages=[Message(role="user", content=prompt)], tools=[],
