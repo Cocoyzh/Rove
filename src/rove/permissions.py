@@ -153,6 +153,9 @@ class PermissionPolicy:
         "protocol_response",
         "check_background",
         "idle",
+        "memory_store",
+        "memory_recall",
+        "memory_update",
     }
 
     _ASK_TOOLS = {

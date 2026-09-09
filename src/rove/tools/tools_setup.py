@@ -4,6 +4,7 @@ from rove.tools.todo import build_todo_tool, todo_tool
 from rove.tools.execute_python import execute_python_tool
 from rove.tools.background import run_bg_tool, check_bg_tool
 from rove.tools.skill_tool import build_skill_tool
+from rove.tools.memory_tools import build_memory_tools
 from rove.task_manager import TaskManager
 from rove.tools.team_tool import build_team_tools
 from rove.tools.agent_teams import TeammateManger
@@ -27,6 +28,7 @@ def build_default_registry(
         *FILE_TOOLS,
         *build_team_tools(team_manager),
         build_skill_tool(skill_loader),
+        *build_memory_tools(),
         run_bg_tool,
         check_bg_tool,
     ])

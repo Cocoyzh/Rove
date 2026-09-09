@@ -1,9 +1,11 @@
 import json
+import time
 from typing import List
 from rich.console import Console
 from rove.tool_registry import ToolRegistry
 from rove.prompt.system_prompt import SYSTEM_PROMPT
 from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES, compact_history
+from rove.memory import MEMORY
 from rove.tools.message_bus import BUS
 from rove.tools.background import bg_manager
 from rove.llm import LLMResponse, LLMRequest
@@ -11,6 +13,22 @@ from rove.llm_adapters import BaseLLMAdapter
 from rove.messages import Message
 
 console = Console()
+
+
+def _store_l4_summary(summary: str) -> None:
+    """L4/应急压缩的摘要沉淀进长期记忆（Issue #4：压缩与记忆联动）。"""
+    MEMORY.long_term.store("episodic", f"summary_{int(time.time())}", summary[:2000])
+
+
+def _build_system_prompt(query: str) -> str:
+    """System Prompt = 核心指令 + 记忆块（工作记忆 + 长期记忆检索）。
+
+    记忆走 system prompt 注入，天然位于压缩流水线之外，永不失忆。
+    """
+    memory_block = MEMORY.build_system_context(query)
+    if memory_block:
+        return f"{SYSTEM_PROMPT}\n\n{memory_block}"
+    return SYSTEM_PROMPT
 
 
 class LeadAgent:
@@ -24,7 +42,8 @@ class LeadAgent:
         self._conv_start_output = self.llm.total_output_tokens
 
     def reset(self) -> None:
-        """清空对话历史，开始新会话。"""
+        """清空对话历史，开始新会话。工作记忆快照归档进长期记忆（轻量反思）。"""
+        MEMORY.archive_working_memory()
         self.messages = []
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
@@ -41,7 +60,7 @@ class LeadAgent:
         if not self.messages:
             console.print("[dim]没有可压缩的对话[/dim]")
             return
-        self.messages[:] = compact_history(self.llm, self.messages)
+        self.messages[:] = compact_history(self.llm, self.messages, on_summary=_store_l4_summary)
 
     @staticmethod
     def _stream_text(text: str) -> None:
@@ -70,11 +89,12 @@ class LeadAgent:
                     self.messages.append(Message(role="user",
                                                  content=f"<background-results>\n{notif_text}\n</background-results>"))
 
-                run_pipeline(self.llm, self.messages)
+                run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
 
                 try:
                     request = LLMRequest(messages=self.messages, tools=self.tools,
-                                         max_tokens=8000, system_prompt=SYSTEM_PROMPT)
+                                         max_tokens=8000,
+                                         system_prompt=_build_system_prompt(query if step == 0 else ""))
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     if response.content:
                         console.print()

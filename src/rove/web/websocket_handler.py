@@ -10,6 +10,7 @@ from rove.tools.agent_teams import TeammateManger
 from rove.permissions import PermissionPolicy, VALID_APPROVAL_MODES
 from rove.tool_registry import ToolRegistry
 from rove.tools.todo import build_todo_tool
+from rove.tools.memory_tools import build_memory_tools
 from rove.tools.tools_setup import (
     execute_python_tool,
     run_bg_tool,
@@ -60,6 +61,7 @@ class SessionConnection:
             *FILE_TOOLS,
             *build_team_tools(self.team_manager),
             build_skill_tool(self.app_state.skill_loader),
+            *build_memory_tools(),
             run_bg_tool,
             check_bg_tool,
         ])

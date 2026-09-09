@@ -365,13 +365,21 @@ def _summarize_history(llm: BaseLLMAdapter, messages: list[Message]) -> str:
     return summary or "(摘要为空)"
 
 
-def compact_history(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
-    """L4: 前三层压不下去时，调 LLM 做全量摘要并保留近期尾部消息。"""
+def compact_history(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) -> list[Message]:
+    """L4: 前三层压不下去时，调 LLM 做全量摘要并保留近期尾部消息。
+
+    on_summary(summary)：摘要产出回调（如沉淀进长期记忆），由调用方注入。
+    """
     transcript_path = _write_transcript(messages)
     console.print(f"[bold yellow]⚠ L4 压缩: 对话已存档[/bold yellow] [dim]{transcript_path}[/dim]")
 
     summary = _summarize_history(llm, messages)
     console.print(f"[bold yellow]⚠ L4 压缩: 摘要完成[/bold yellow] [dim]{len(summary)} 字符[/dim]")
+    if on_summary:
+        try:
+            on_summary(summary)
+        except Exception as e:
+            console.print(f"[yellow]⚠ L4 摘要回调失败: {e}[/yellow]")
 
     tail_count = min(6, len(messages))
     tail_start = max(0, len(messages) - tail_count)
@@ -385,12 +393,17 @@ def compact_history(llm: BaseLLMAdapter, messages: list[Message]) -> list[Messag
     return [summary_msg, *messages[tail_start:]]
 
 
-def reactive_compact(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
+def reactive_compact(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) -> list[Message]:
     """应急压缩：API 返回 prompt_too_long 时的最后手段。"""
     transcript_path = _write_transcript(messages)
     console.print(f"[bold yellow]⚠ 应急压缩: 对话已存档[/bold yellow] [dim]{transcript_path}[/dim]")
 
     summary = _summarize_history(llm, messages)
+    if on_summary:
+        try:
+            on_summary(summary)
+        except Exception as e:
+            console.print(f"[yellow]⚠ 应急压缩摘要回调失败: {e}[/yellow]")
 
     tail_start = max(0, len(messages) - 5)
     if 0 < tail_start < len(messages) and messages[tail_start].role == "tool":
@@ -409,9 +422,9 @@ def reactive_compact(llm: BaseLLMAdapter, messages: list[Message]) -> list[Messa
 MAX_REACTIVE_RETRIES = 1
 
 
-def run_pipeline(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
+def run_pipeline(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) -> list[Message]:
     """压缩流水线入口：L3 → L2 → L1 → L4。
-    在每轮 LLM 调用前调用，原地修改 messages。
+    在每轮 LLM 调用前调用，原地修改 messages；on_summary 透传给 L4/应急压缩。
     """
     context_window = getattr(llm, "context_window", 1_000_000)
 
@@ -432,6 +445,6 @@ def run_pipeline(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
     l4_limit = int(context_window * L4_WATERMARK_RATIO)
     if current_tokens > l4_limit:
         console.print("[bold yellow]⚠ 上下文超标，触发 L4 摘要[/bold yellow]")
-        messages[:] = compact_history(llm, messages)
+        messages[:] = compact_history(llm, messages, on_summary=on_summary)
 
     return messages

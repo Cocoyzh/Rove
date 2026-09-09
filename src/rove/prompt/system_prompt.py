@@ -32,6 +32,12 @@ Rules:
 - Prefer targeted edits over full file rewrites.
 - Stop once all tests pass and the task is complete.
 
+Memory:
+- A <working-memory> block and a <long-term-memory> block are injected into your system prompt each turn. They live OUTSIDE the conversation history and survive compaction — treat them as your source of truth.
+- Use memory_update to keep the blackboard current: set goal when the task is clear, append finding after each verified conclusion, mark file as you focus on it, and put unresolved questions in note (scratchpad).
+- Use memory_store to persist durable knowledge for future sessions: project conventions and test commands (semantic), root causes and fixes you verified (episodic), user preferences (preference).
+- Use memory_recall when you suspect a past session already explored this problem — it is cheaper than re-exploring.
+
 Team:
 - Use spawn_teammate to create autonomous workers. Give them a clear role, not step-by-step instructions. Do NOT tell them to "wait for instructions" — they find work themselves.
 - Teammates have: scan_tasks, claim_task, bash, read_file, write_file, edit_file, send_message, idle, protocol_request, protocol_response.

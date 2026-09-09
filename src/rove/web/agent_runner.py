@@ -3,7 +3,7 @@ import time
 from typing import Callable, Optional, Dict, Any, List
 from rich.console import Console
 
-from rove.lead_agent import LeadAgent
+from rove.lead_agent import LeadAgent, _build_system_prompt, _store_l4_summary
 from rove.prompt.system_prompt import SYSTEM_PROMPT
 from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES
 from rove.tools.message_bus import BUS
@@ -72,14 +72,14 @@ class WebLeadAgent(LeadAgent):
                         Message(role="user", content=f"<background-results>\n{notif_text}\n</background-results>")
                     )
 
-                run_pipeline(self.llm, self.messages)
+                run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
 
                 try:
                     request = LLMRequest(
                         messages=self.messages,
                         tools=self.tools,
                         max_tokens=8000,
-                        system_prompt=SYSTEM_PROMPT,
+                        system_prompt=_build_system_prompt(query if step == 0 else ""),
                     )
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     if response.content:
