@@ -142,6 +142,7 @@ class TestCommandClassifier(unittest.TestCase):
             "find . -name '*.py' -delete",
             "find . -name '*.tmp' -exec rm -f {} \\;",
             "find . -ok rm {} \\;",
+            "find . -fprintf listing.txt '%p\\n'",
         ]
         for cmd in dangerous_find:
             is_safe, reason = self.classifier.classify(cmd)

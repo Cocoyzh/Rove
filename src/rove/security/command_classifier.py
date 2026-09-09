@@ -141,6 +141,7 @@ class CommandClassifier:
         "-okdir",
         "-fprint",
         "-fprint0",
+        "-fprintf",
         "-fls",
     }
 
