@@ -102,6 +102,8 @@ class TestCommandClassifier(unittest.TestCase):
             "cat $(which python)",
             "cat `which python`",
             "echo ${PATH}",
+            "cat $HOME/.netrc",
+            "ls $PWD/..",
         ]
         for cmd in unsafe_substitutions:
             is_safe, reason = self.classifier.classify(cmd)

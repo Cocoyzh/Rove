@@ -190,6 +190,11 @@ class CommandClassifier:
         if "${" in cmd:
             return False, "Shell parameter expansion (${...}) detected"
 
+        # Bare $VAR (e.g. $HOME) also expands at runtime and its value is
+        # unknowable statically, so it bypasses every path/sensitive check below
+        if "$" in cmd:
+            return False, "Shell variable expansion ($VAR) is not allowed in read-only commands"
+
         # shlex treats raw newlines as whitespace, so everything after a newline
         # would be merged into the first sub-command and bypass chain-splitting
         if "\n" in cmd or "\r" in cmd:
