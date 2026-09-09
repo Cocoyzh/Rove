@@ -271,6 +271,34 @@ class CommandClassifier:
 
         return True, ""
 
+    def find_workspace_escape(self, command: str) -> str | None:
+        """返回命令中第一个逃出工作区的路径参数（不逃逸返回 None）。
+
+        与 classify() 的白名单无关，供权限策略对所有 bash 命令（含非只读）
+        做工作区边界硬检查：以 / 或 ~ 开头、或含 .. 的参数都会解析比对，
+        逃逸即返回该 token。无法分词时保守返回占位串以触发拒绝。
+        """
+        if not isinstance(command, str) or not command.strip():
+            return None
+
+        try:
+            lexer = shlex.shlex(command.strip(), punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            return "<unparsable command>"
+
+        for token in tokens:
+            if token.startswith("-"):
+                continue
+            clean = token.strip("\"'")
+            if not clean:
+                continue
+            is_within, _ = self._check_path_bounds(clean)
+            if not is_within:
+                return token
+        return None
+
     def is_workspace_redirection(self, command: str) -> bool:
         """判断命令的输出重定向是否全部落在工作区内。
 

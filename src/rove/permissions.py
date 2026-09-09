@@ -185,6 +185,10 @@ class PermissionPolicy:
         if path_reason:
             return PermissionDecision.DENY, path_reason
 
+        boundary_reason = self._check_bash_boundary(tool_name, arguments)
+        if boundary_reason:
+            return PermissionDecision.DENY, boundary_reason
+
         if self.approval_mode is ApprovalMode.FULL_ACCESS:
             # 安全底线（硬拒绝 + 文件越界）已在上方无条件拦截
             return PermissionDecision.ALLOW, f"Full access mode: {tool_name} auto-approved"
@@ -245,4 +249,27 @@ class PermissionPolicy:
         if not target.is_relative_to(self._workspace):
             return f"Path escapes workspace: {raw_path}"
 
+        return None
+
+    def _check_bash_boundary(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> str | None:
+        """bash/run_background 参数路径逃逸工作区即硬拒绝（Issue #9）。
+
+        与只读白名单和权限模式无关，对所有 bash 命令生效：阻止 find /
+        全盘遍历、ls .. 越界窥探以及任意工作区外路径访问。命令参数无法
+        区分读写意图，故按最严格的边界处理。
+        """
+        if tool_name not in {"bash", "run_background"}:
+            return None
+
+        command = arguments.get("command", "")
+        if not isinstance(command, str):
+            return None
+
+        escape_token = self._classifier.find_workspace_escape(command)
+        if escape_token:
+            return f"Path escapes workspace: {escape_token}"
         return None

@@ -1,10 +1,23 @@
+import platform
+
 from rove.skill_loader import SkillLoader
-from rove.paths import SKILL_DIR
+from rove.paths import SKILL_DIR, WORKSPACE_ROOT, AGENT_TMP_DIR
 
 skill_loader = SkillLoader(SKILL_DIR)
+
+# 环境声明（Issue #9）：显式告知真实宿主环境，消除容器路径幻觉
+ENVIRONMENT_PROMPT = f"""Environment:
+- Host OS: {platform.system()} {platform.release()} ({platform.machine()}). This is the user's real machine, NOT a container.
+- Workspace root (absolute): {WORKSPACE_ROOT}
+- All file tool paths resolve relative to the workspace root. Container-style paths like /workspace do NOT exist.
+- Use {AGENT_TMP_DIR} for any temporary/scratch files. Do NOT write to the host /tmp.
+- Bash commands whose arguments reach outside the workspace root are hard-denied by the permission layer.
+
+"""
+
 SYSTEM_PROMPT = f"""You are Rove, an extensible coding agent harness. Your goal is to understand, modify, and verify code in a repository.
 
-Workflow:
+{ENVIRONMENT_PROMPT}Workflow:
 1. Plan — Use todo to break down multi-step work and track progress.
 2. Explore — Read files, search code, or run shell commands to understand the current state.
 3. Modify — Edit or write files to make changes.

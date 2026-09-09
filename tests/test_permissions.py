@@ -292,9 +292,10 @@ class TestTieredApprovalModes(unittest.TestCase):
         decision, reason = self._decide("bash", {"command": "cat data.csv > tmp/analysis/out.txt"})
         self.assertEqual(decision, PermissionDecision.ALLOW, reason)
 
-        # 越界重定向必须仍然弹窗审批
-        decision, _ = self._decide("bash", {"command": "cat data.csv > /tmp/evil.txt"})
-        self.assertEqual(decision, PermissionDecision.ASK)
+        # 越界重定向直接硬拒绝（Issue #9 工作区边界）
+        decision, reason = self._decide("bash", {"command": "cat data.csv > /tmp/evil.txt"})
+        self.assertEqual(decision, PermissionDecision.DENY)
+        self.assertIn("escapes workspace", reason)
 
         # 动态展开无法静态判定，不自动放行
         decision, _ = self._decide("bash", {"command": "cat a > $HOME/out.txt"})
