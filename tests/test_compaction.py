@@ -212,6 +212,33 @@ def test_l2_micro_compact_anti_loop_and_threshold():
         assert tool_msgs[i].content == f"Normal output {i}"
 
 
+def test_l2_persists_oversized_old_results(tmp_path):
+    """L2 对滑出保留窗口的超长输出应落盘持久化并保留路径指针，
+    全文可回溯，且已持久化的消息不会被二度处理。"""
+    messages = [Message(role="user", content="分析日志")]
+    for i in range(12):
+        messages.append(Message(
+            role="assistant",
+            tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="read", tool_args={})]
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"c_{i}", content=f"LOG_DATA_{i}: " + "Z" * 6000))
+
+    compacted = micro_compact(messages, tmp_path)
+
+    old_msg = [m for m in compacted if m.tool_call_id == "c_0"][0]
+    assert "<persisted-output>" in old_msg.content
+
+    persist_file = tmp_path / "c_0.txt"
+    assert persist_file.exists()
+    assert "LOG_DATA_0" in persist_file.read_text(encoding="utf-8")
+    assert str(persist_file) in old_msg.content
+
+    # 再次触发 L2：已持久化的消息不再被二度处理
+    compacted_again = micro_compact(compacted, tmp_path)
+    again_msg = [m for m in compacted_again if m.tool_call_id == "c_0"][0]
+    assert again_msg.content == old_msg.content
+
+
 def test_persisted_output_protection(tmp_path):
     """测试已持久化的 <persisted-output> 永远不会被后续的 L2/L1 抹除路径"""
     # 模拟 L3 写入持久化输出

@@ -167,8 +167,12 @@ def tool_result_budget(messages: list[Message], tool_results_dir: Path) -> list[
 
 
 # ---------------- L2 -------------------
-def micro_compact(messages: list[Message]) -> list[Message]:
-    """L2: 压缩较早轮次的超长工具输出。"""
+def micro_compact(messages: list[Message], tool_results_dir: Path | None = None) -> list[Message]:
+    """L2: 压缩较早轮次的超长工具输出。
+
+    提供 tool_results_dir 时把完整输出落盘并在消息中保留路径指针，
+    避免纯截断导致内容不可回溯；未提供时退化为首尾切片。
+    """
     tool_results = [msg for msg in messages if msg.role == "tool"]
     if len(tool_results) <= KEEP_RECENT:
         return messages
@@ -182,15 +186,34 @@ def micro_compact(messages: list[Message]) -> list[Message]:
             head = content[:500]
             tail = content[-500:]
             omitted = len(content) - 1000
-            msg.content = (
-                f"{head}\n"
-                f"\n... [Output truncated ({omitted} chars omitted). Use read_file with line ranges or grep if specific sections needed] ...\n\n"
-                f"{tail}"
-            )
+
+            persist_path: Path | None = None
+            if tool_results_dir is not None:
+                tool_results_dir.mkdir(parents=True, exist_ok=True)
+                persist_path = tool_results_dir / f"{msg.tool_call_id or f'l2_{id(msg)}'}.txt"
+                if not persist_path.exists():
+                    persist_path.write_text(content, encoding="utf-8")
+
+            if persist_path is not None:
+                msg.content = (
+                    f"<persisted-output>\n"
+                    f"Full output path : {str(persist_path)}\n"
+                    f"Total size : {len(content)} 字符\n"
+                    f"Preview :\n{head}\n"
+                    f"\n... [Output truncated ({omitted} chars omitted). Full output saved to disk; use read_file with line ranges to inspect specific sections] ...\n\n"
+                    f"{tail}\n"
+                    f"</persisted-output>"
+                )
+            else:
+                msg.content = (
+                    f"{head}\n"
+                    f"\n... [Output truncated ({omitted} chars omitted). Use read_file with line ranges or grep if specific sections needed] ...\n\n"
+                    f"{tail}"
+                )
             truncated += 1
 
     if truncated:
-        console.print(f"[bold yellow]⚠ L2 micro: 截断了 {truncated} 条旧工具结果[/bold yellow]")
+        console.print(f"[bold yellow]⚠ L2 micro: 脱水了 {truncated} 条旧工具结果[/bold yellow]")
     return messages
 
 
@@ -373,7 +396,7 @@ def run_pipeline(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
 
     l2_limit = int(context_window * L2_WATERMARK_RATIO)
     if current_tokens >= l2_limit:
-        messages[:] = micro_compact(messages)
+        messages[:] = micro_compact(messages, TOOL_RESULTS_DIR)
         current_tokens = estimate_messages_tokens(messages)
 
     l1_limit = int(context_window * L1_WATERMARK_RATIO)
