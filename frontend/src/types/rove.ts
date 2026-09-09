@@ -39,6 +39,9 @@ export interface ApprovalRequest {
   tool_name: string;
   arguments: Record<string, any>;
   reason: string;
+  suggested_prefix?: string;
+  target_path?: string;
+  available_choices?: string[];
 }
 
 export interface SessionSummary {

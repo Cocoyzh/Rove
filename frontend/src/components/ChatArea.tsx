@@ -14,7 +14,7 @@ interface ChatAreaProps {
   pendingApproval: ApprovalRequest | null;
   isRunning: boolean;
   onSendMessage: (query: string) => void;
-  onSendApproval: (approvalId: string, decision: 'y' | 's' | 'N') => void;
+  onSendApproval: (approvalId: string, decision: string) => void;
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   isCollabOpen: boolean;

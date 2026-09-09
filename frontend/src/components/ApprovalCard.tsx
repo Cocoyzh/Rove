@@ -1,13 +1,18 @@
 import React from 'react';
-import { ShieldAlert, Check, ShieldCheck, XCircle } from 'lucide-react';
+import { ShieldAlert, Check, ShieldCheck, XCircle, Terminal, FileCode, Wrench } from 'lucide-react';
 import { ApprovalRequest } from '../types/rove';
 
 interface ApprovalCardProps {
   approval: ApprovalRequest;
-  onRespond: (approvalId: string, decision: 'y' | 's' | 'N') => void;
+  onRespond: (approvalId: string, decision: string) => void;
 }
 
 export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onRespond }) => {
+  const isBash = ['bash', 'run_background'].includes(approval.tool_name);
+  const isFile = ['write_file', 'edit_file'].includes(approval.tool_name);
+  const prefix = approval.suggested_prefix;
+  const path = approval.target_path;
+
   return (
     <div className="my-4 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 shadow-sm text-sm font-sans">
       {/* 头部警告与原因 */}
@@ -50,14 +55,53 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ approval, onRespond 
           <span>拒绝 (Deny)</span>
         </button>
 
+        {/* Bash 前缀放行按钮 */}
+        {isBash && prefix && (
+          <button
+            onClick={() => onRespond(approval.approval_id, 'c')}
+            title={`本会话放行 '${prefix} *' 开头的所有命令`}
+            className="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-100/80 hover:bg-amber-200/80 hover:border-amber-400 text-amber-900 text-xs font-medium flex items-center space-x-1.5 transition-all shadow-xs"
+          >
+            <Terminal size={14} className="text-amber-700" />
+            <span>放行前缀: <code className="font-mono font-semibold">{prefix} *</code></span>
+          </button>
+        )}
+
+        {/* 文件路径放行按钮 */}
+        {isFile && path && (
+          <button
+            onClick={() => onRespond(approval.approval_id, 'p')}
+            title={`本会话放行对文件 '${path}' 的所有写入与修改`}
+            className="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-100/80 hover:bg-amber-200/80 hover:border-amber-400 text-amber-900 text-xs font-medium flex items-center space-x-1.5 transition-all shadow-xs"
+          >
+            <FileCode size={14} className="text-amber-700" />
+            <span>放行该文件: <code className="font-mono font-semibold">{path.length > 25 ? '...' + path.slice(-22) : path}</code></span>
+          </button>
+        )}
+
+        {/* 工具级全局放行按钮 (非 Bash) */}
+        {!isBash && (
+          <button
+            onClick={() => onRespond(approval.approval_id, 't')}
+            title={`本会话放行工具 '${approval.tool_name}' 的所有后续调用`}
+            className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-xs font-medium flex items-center space-x-1.5 transition-all shadow-xs"
+          >
+            <Wrench size={14} className="text-amber-600" />
+            <span>放行整个工具</span>
+          </button>
+        )}
+
+        {/* 完全相同参数放行 */}
         <button
           onClick={() => onRespond(approval.approval_id, 's')}
+          title="仅当后续工具参数与本次完全一致时才免批"
           className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-xs font-medium flex items-center space-x-1.5 transition-all shadow-xs"
         >
           <ShieldCheck size={14} className="text-sky-600" />
-          <span>本会话同类免问</span>
+          <span>仅相同参数免问</span>
         </button>
 
+        {/* 单次允许 */}
         <button
           onClick={() => onRespond(approval.approval_id, 'y')}
           className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs flex items-center space-x-1.5 transition-all shadow-sm"
