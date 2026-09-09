@@ -23,6 +23,8 @@ class BaseLLMAdapter(ABC):
         self.total_output_tokens = 0
         self.call_count = 0
         self.last_input_tokens = 0
+        self.last_output_tokens = 0
+        self.cjk_token_ratio = 1.3
         self.context_window = context_window or CONTEXT_WINDOWS.get(self.model, DEFAULT_CONTEXT_WINDOW)
 
     def _record_usage(self, response: LLMResponse) -> LLMResponse:
@@ -31,6 +33,19 @@ class BaseLLMAdapter(ABC):
             self.total_output_tokens += response.usage.output_tokens
             self.call_count += 1
             self.last_input_tokens = response.usage.input_tokens
+            self.last_output_tokens = response.usage.output_tokens
+
+            content = response.content or ""
+            c_len = len(content)
+            if c_len > 0 and response.usage.output_tokens > 0:
+                b_len = len(content.encode("utf-8", errors="ignore"))
+                non_ascii = (b_len - c_len) // 2
+                if non_ascii >= 20:
+                    ascii_chars = c_len - non_ascii
+                    remaining = response.usage.output_tokens - (ascii_chars / 3.8)
+                    if remaining > 0:
+                        observed = max(0.5, min(2.5, remaining / non_ascii))
+                        self.cjk_token_ratio = round(self.cjk_token_ratio * 0.5 + observed * 0.5, 3)
         return response
 
     @abstractmethod
@@ -62,7 +77,14 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
         result: List[dict] = []
         for msg in messages:
             if msg.role == "user":
-                result.append({"role": "user", "content": msg.content})
+                last = result[-1] if result else None
+                if last is not None and last["role"] == "user":
+                    if isinstance(last["content"], str):
+                        last["content"] = f"{last['content']}\n\n{msg.content or ''}"
+                    elif isinstance(last["content"], list):
+                        last["content"].append({"type": "text", "text": msg.content or ""})
+                else:
+                    result.append({"role": "user", "content": msg.content})
             elif msg.role == "assistant":
                 blocks: list = []
                 if msg.content:
@@ -82,9 +104,11 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
                          "tool_use_id": msg.tool_call_id,
                          "content": msg.content}
                 last = result[-1] if result else None
-                if (last is not None and last["role"] == "user"
-                        and isinstance(last["content"], list)):
-                    last["content"].append(block)
+                if last is not None and last["role"] == "user":
+                    if isinstance(last["content"], list):
+                        last["content"].append(block)
+                    else:
+                        last["content"] = [{"type": "text", "text": last["content"]}, block]
                 else:
                     result.append({"role": "user", "content": [block]})
         return result
