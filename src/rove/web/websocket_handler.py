@@ -143,6 +143,9 @@ class SessionConnection:
             "tool_name": data["tool_name"],
             "arguments": data["arguments"],
             "reason": data["reason"],
+            "suggested_prefix": data.get("suggested_prefix", ""),
+            "target_path": data.get("target_path", ""),
+            "available_choices": data.get("available_choices", ["y", "s", "n"]),
         })
 
     async def handle_chat(self, query: str) -> None:

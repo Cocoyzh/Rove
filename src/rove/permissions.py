@@ -4,6 +4,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from rove.security.approval_store import (
+    SessionApprovalStore,
+    canonicalize_arguments,
+)
+from rove.security.command_classifier import (
+    CommandClassifier,
+    extract_command_prefix,
+)
+
 
 class PermissionDecision(str, Enum):
     ALLOW = "allow"
@@ -12,19 +21,24 @@ class PermissionDecision(str, Enum):
 
 
 class ApprovalManager:
-    def __init__(self):
-        self._session_approvals: set[str] = set()
+    def __init__(self, store: SessionApprovalStore | None = None) -> None:
+        self._store = store if store is not None else SessionApprovalStore()
         self._lock = threading.Lock()
+
+    @property
+    def store(self) -> SessionApprovalStore:
+        return self._store
 
     def read_input(self, prompt: str) -> str:
         with self._lock:
             return input(prompt)
 
     def request(self, tool_name: str, arguments: dict[str, Any], reason: str) -> bool:
-        approval_key = self._approval_key(tool_name, arguments)
+        if self._store.is_approved(tool_name, arguments):
+            return True
 
         with self._lock:
-            if approval_key in self._session_approvals:
+            if self._store.is_approved(tool_name, arguments):
                 return True
 
             arguments_text = json.dumps(arguments, ensure_ascii=False, default=str)
@@ -35,27 +49,63 @@ class ApprovalManager:
             print(f"Tool: {tool_name}")
             print(f"Arguments: {arguments_text}")
 
+            prompt_str = self._build_prompt(tool_name, arguments)
+
             try:
-                choice = input(
-                    "Allow? [y] once / [s] same action for session / [N] deny: "
-                ).strip().lower()
+                choice = input(prompt_str).strip().lower()
             except (EOFError, KeyboardInterrupt):
                 return False
 
-            if choice in {"s", "session"}:
-                self._session_approvals.add(approval_key)
-                return True
+            return self._handle_choice(choice, tool_name, arguments)
 
-            return choice in {"y", "yes"}
+    @staticmethod
+    def _build_prompt(tool_name: str, arguments: dict[str, Any]) -> str:
+        if tool_name in {"bash", "run_background"}:
+            cmd = arguments.get("command", "")
+            prefix = extract_command_prefix(cmd)
+            prefix_display = f"'{prefix} *'" if prefix else "command prefix"
+            return f"Allow? [y] once / [s] exact / [c] prefix {prefix_display} / [N] deny: "
+
+        if tool_name in {"write_file", "edit_file"}:
+            path = arguments.get("path", "")
+            path_display = f"'{path}'" if path else "path"
+            return f"Allow? [y] once / [s] exact / [p] path {path_display} / [t] tool / [N] deny: "
+
+        return "Allow? [y] once / [s] exact / [t] tool / [N] deny: "
+
+    def _handle_choice(self, choice: str, tool_name: str, arguments: dict[str, Any]) -> bool:
+        if choice in {"y", "yes"}:
+            return True
+
+        if choice in {"s", "session", "exact"}:
+            self._store.add_exact_rule(tool_name, arguments)
+            return True
+
+        if choice in {"c", "command", "prefix"} and tool_name in {"bash", "run_background"}:
+            prefix = extract_command_prefix(arguments.get("command", ""))
+            if prefix:
+                self._store.add_prefix_rule(tool_name, prefix)
+            else:
+                self._store.add_exact_rule(tool_name, arguments)
+            return True
+
+        if choice in {"p", "path"} and tool_name in {"write_file", "edit_file"}:
+            path = arguments.get("path", "")
+            if path:
+                self._store.add_path_rule(tool_name, path)
+            else:
+                self._store.add_exact_rule(tool_name, arguments)
+            return True
+
+        if choice in {"t", "tool"} and tool_name not in {"bash", "run_background"}:
+            self._store.add_tool_rule(tool_name)
+            return True
+
+        return False
 
     @staticmethod
     def _approval_key(tool_name: str, arguments: dict[str, Any]) -> str:
-        canonical_arguments = json.dumps(
-            arguments,
-            ensure_ascii=False,
-            sort_keys=True,
-            default=str,
-        )
+        canonical_arguments = canonicalize_arguments(arguments)
         return f"{tool_name}:{canonical_arguments}"
 
 
@@ -103,6 +153,7 @@ class PermissionPolicy:
 
     def __init__(self, workspace: Path):
         self._workspace = workspace.resolve()
+        self._classifier = CommandClassifier(self._workspace)
 
     def decide(
         self,
@@ -116,6 +167,13 @@ class PermissionPolicy:
         path_reason = self._check_workspace_path(tool_name, arguments)
         if path_reason:
             return PermissionDecision.DENY, path_reason
+
+        if tool_name in {"bash", "run_background"}:
+            command = arguments.get("command", "")
+            is_safe, reason = self._classifier.classify(command)
+            if is_safe:
+                return PermissionDecision.ALLOW, "Safe read-only command"
+            return PermissionDecision.ASK, f"Bash command requires approval: {reason}"
 
         if tool_name in self._ASK_TOOLS:
             return PermissionDecision.ASK, "This operation requires user approval"

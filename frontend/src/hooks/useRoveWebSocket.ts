@@ -114,6 +114,9 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
                 tool_name: data.tool_name,
                 arguments: data.arguments,
                 reason: data.reason,
+                suggested_prefix: data.suggested_prefix,
+                target_path: data.target_path,
+                available_choices: data.available_choices,
               });
               break;
 
@@ -204,7 +207,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     return true;
   }, []);
 
-  const sendApproval = useCallback((approvalId: string, decision: 'y' | 's' | 'N') => {
+  const sendApproval = useCallback((approvalId: string, decision: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       return false;
     }
