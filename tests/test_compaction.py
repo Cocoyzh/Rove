@@ -92,6 +92,27 @@ def test_online_self_calibration():
     assert dummy_llm.cjk_token_ratio < 0.95
 
 
+def test_calibration_ignores_tool_call_responses():
+    """带 tool_use 的响应其 output_tokens 包含 JSON 结构开销，
+    不能参与 cjk_token_ratio 在线校准，否则比例被系统性抬高。"""
+    from rove.llm import Usage
+    dummy_llm = DummyLLM()
+    assert dummy_llm.cjk_token_ratio == 1.3
+
+    # 文本足够长（非 ASCII >= 20），但 output_tokens 严重虚高（含工具调用开销）
+    response = LLMResponse(
+        content="这段中文文本足够长，专门用于验证工具调用响应不会触发校准采样逻辑。" * 2,
+        tool_calls=[ToolCall(tool_id="t1", tool_name="bash", tool_args={"cmd": "ls"})],
+        model="test-model",
+        stop_reason="tool_use",
+        usage=Usage(input_tokens=1000, output_tokens=900),
+    )
+    dummy_llm._record_usage(response)
+
+    # 比例必须保持初始值，未被污染
+    assert dummy_llm.cjk_token_ratio == 1.3
+
+
 def test_user_anchor_preservation():
     """测试 L1 消息剪枝中的【用户指令锚点（User Pinning）】机制：
     中途用户修改需求的指令绝对不能被剪除。

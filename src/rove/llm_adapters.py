@@ -37,7 +37,9 @@ class BaseLLMAdapter(ABC):
 
             content = response.content or ""
             c_len = len(content)
-            if c_len > 0 and response.usage.output_tokens > 0:
+            # 校准仅取纯文本响应：tool_use 的 JSON 结构开销与思考 token
+            # 同样计入 output_tokens，混入会把 observed 比例系统性抬高
+            if c_len > 0 and not response.tool_calls and response.usage.output_tokens > 0:
                 b_len = len(content.encode("utf-8", errors="ignore"))
                 non_ascii = (b_len - c_len) // 2
                 if non_ascii >= 20:
