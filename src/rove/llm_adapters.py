@@ -11,6 +11,10 @@ CONTEXT_WINDOWS = {
 }
 DEFAULT_CONTEXT_WINDOW = 1_000_000
 
+# 思考模型耗尽输出 Token 时的兜底文本前缀（_build_response），
+# 供下游（如 L4 摘要）识别"拿到的是思维链碎片而非正式产出"
+THINKING_FALLBACK_MARKER = "*(思考中已达Token上限)*"
+
 class BaseLLMAdapter(ABC):
     def __init__(self, model: str, api_key: str, base_url: Optional[str], timeout: Optional[int],
                  context_window: Optional[int] = None):
@@ -135,7 +139,7 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
             # 兼容仅有思考块或耗尽输出 Token 的场景
             for block in message.content:
                 if getattr(block, "type", "") == "thinking" and getattr(block, "thinking", ""):
-                    text = f"*(思考中已达Token上限)*: {block.thinking[:200]}..."
+                    text = f"{THINKING_FALLBACK_MARKER}: {block.thinking[:200]}..."
                     break
         usage = None
         if hasattr(message, "usage"):

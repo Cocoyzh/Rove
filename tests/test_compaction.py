@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from rove.messages import Message, ToolCall
 from rove.llm import LLMResponse, LLMRequest
-from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
+from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter, THINKING_FALLBACK_MARKER
 from rove.compaction.compaction_layers import (
     estimate_messages_tokens,
     tool_result_budget,
@@ -11,9 +11,11 @@ from rove.compaction.compaction_layers import (
     snip_compact,
     compact_history,
     run_pipeline,
+    _summarize_history,
     KEEP_RECENT,
     COMPACT_THRESHOLD,
     PERSIST_THRESHOLD,
+    MAX_SUMMARY_TOKENS,
 )
 
 
@@ -388,6 +390,44 @@ def test_l4_summary_covers_head_and_tail():
     assert "EARLY_GOAL_MARKER" in prompt, "对话开头的原始目标必须进入摘要输入"
     assert "LATE_CONSTRAINT_MARKER" in prompt, "对话末尾的最新约束必须进入摘要输入"
     assert "中段过长已省略" in prompt
+
+
+def test_l4_summary_retries_on_thinking_fragment():
+    """L4 摘要在思考模型耗尽输出 Token、只产出思维链碎片时，
+    必须加倍预算重试一次，拿回真正的结构化摘要。"""
+    calls = []
+
+    class ThinkingLLM(DummyLLM):
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            calls.append(request.max_tokens)
+            if len(calls) == 1:
+                return LLMResponse(
+                    content=f"{THINKING_FALLBACK_MARKER}: 我们需要总结对话，先看用户目标……",
+                    tool_calls=[], model=self.model, stop_reason="max_tokens",
+                )
+            return LLMResponse(
+                content="1. 目标：排查内存泄漏\n2. 已读文件：app.py",
+                tool_calls=[], model=self.model, stop_reason="end_turn",
+            )
+
+    summary = _summarize_history(ThinkingLLM(), [Message(role="user", content="排查内存泄漏")])
+    assert "内存泄漏" in summary
+    assert calls == [MAX_SUMMARY_TOKENS, MAX_SUMMARY_TOKENS * 2]
+
+
+def test_l4_summary_retries_on_empty():
+    """摘要完全为空时同样加倍预算重试一次"""
+    calls = []
+
+    class EmptyThenGoodLLM(DummyLLM):
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            calls.append(request.max_tokens)
+            content = "" if len(calls) == 1 else "1. 目标：重构缓存层"
+            return LLMResponse(content=content, tool_calls=[], model=self.model, stop_reason="end_turn")
+
+    summary = _summarize_history(EmptyThenGoodLLM(), [Message(role="user", content="hi")])
+    assert "缓存层" in summary
+    assert calls == [MAX_SUMMARY_TOKENS, MAX_SUMMARY_TOKENS * 2]
 
 
 def test_l4_compact_history_retains_tail_memory():

@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 from rich.console import Console
-from rove.llm_adapters import BaseLLMAdapter
+from rove.llm_adapters import BaseLLMAdapter, THINKING_FALLBACK_MARKER
 from rove.llm import LLMResponse, LLMRequest
 from rove.messages import Message
 from rove.paths import TOOL_RESULTS_DIR, TRANSCRIPT_DIR
@@ -31,7 +31,7 @@ PREVIEW_CHARS = 3_000
 
 # L4: Auto Compact
 CONTEXT_LIMIT = 50_000
-MAX_SUMMARY_TOKENS = 2_000
+MAX_SUMMARY_TOKENS = 8_000
 
 # Watermarks
 L2_WATERMARK_RATIO = 0.10
@@ -42,14 +42,14 @@ L4_WATERMARK_RATIO = 0.40
 SUMMARY_CHAR_BUDGET = 80_000
 
 # L4 摘要提示词
-SUMMARY_PROMPT = """请总结以下对话，保留关键信息：
-1. 用户的目标（分析、编码、调试等）
-2. 关键发现或决策（含具体数值、文件路径、代码结果）
-3. 已读取或修改的文件
+SUMMARY_PROMPT = """请总结以下对话。直接输出下面这份结构化事实清单，不要输出任何思考过程或铺垫：
+1. 用户的目标（分析、编码、调试等）与验收标准
+2. 关键发现或决策（必须含具体数值、文件路径、代码结果）
+3. 已读取或修改的文件清单
 4. 未完成的工作
 5. 用户的约束条件与中途指令变更
 
-要求：简洁、保留具体细节（数值、行号、列名、错误信息、需求演进）、不要复述工具调用过程。
+要求：每条都是可独立理解的事实句，保留具体细节（数值、行号、列名、错误信息、需求演进），不要复述工具调用过程。
 
 对话内容：
 {conversation}"""
@@ -336,16 +336,33 @@ def _build_summary_input(messages: list[Message], budget: int = SUMMARY_CHAR_BUD
     return "\n".join([*head, f"...[中段过长已省略 {omitted} 条消息，完整内容见 transcript 存档]...", *tail])
 
 
+def _is_thinking_fragment(text: str) -> bool:
+    """识别 _build_response 的思考兜底文本：思考模型耗尽输出 Token 时，
+    拿到的是思维链碎片而非正式产出。"""
+    return THINKING_FALLBACK_MARKER in text
+
+
 def _summarize_history(llm: BaseLLMAdapter, messages: list[Message]) -> str:
-    """调 LLM 对对话历史做摘要，保留目标、发现、约束。"""
+    """调 LLM 对对话历史做摘要，保留目标、发现、约束。
+
+    思考模型可能把 max_tokens 全部耗在 thinking 上，导致摘要为空或
+    只剩思维链碎片；此时加倍预算重试一次，保证摘要可用。
+    """
     conversation = _build_summary_input(messages)
     prompt = SUMMARY_PROMPT.format(conversation=conversation)
 
-    request = LLMRequest(messages=[Message(role="user", content=prompt)], tools=[],
-                         max_tokens=MAX_SUMMARY_TOKENS)
-    response: LLMResponse = llm.complete(request)
+    max_tokens = MAX_SUMMARY_TOKENS
+    summary = ""
+    for _ in range(2):
+        request = LLMRequest(messages=[Message(role="user", content=prompt)], tools=[],
+                             max_tokens=max_tokens)
+        response: LLMResponse = llm.complete(request)
+        summary = (response.content or "").strip()
+        if summary and not _is_thinking_fragment(summary):
+            return summary
+        max_tokens *= 2
 
-    return response.content or "(摘要为空)"
+    return summary or "(摘要为空)"
 
 
 def compact_history(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
