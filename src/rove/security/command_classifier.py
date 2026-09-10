@@ -224,14 +224,19 @@ class CommandClassifier:
 
         for token in tokens:
             if token in chain_operators:
-                if current_sub_cmd:
-                    sub_commands.append(current_sub_cmd)
-                    current_sub_cmd = []
+                # 残缺命令（'| cat'、';;'）无法静态判定首段，一律拒绝
+                if not current_sub_cmd:
+                    return False, "Empty sub-command around chain operator"
+                sub_commands.append(current_sub_cmd)
+                current_sub_cmd = []
             else:
                 current_sub_cmd.append(token)
 
         if current_sub_cmd:
             sub_commands.append(current_sub_cmd)
+        elif sub_commands:
+            # 以链式操作符结尾（如 'cat a &&'）同样是残缺命令
+            return False, "Trailing chain operator with no command"
 
         if not sub_commands:
             return False, "No executable sub-commands found"

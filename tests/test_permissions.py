@@ -465,5 +465,201 @@ class TestWebApprovalManager(unittest.TestCase):
         self.assertFalse(results["approved"])
 
 
+class TestClassifierEdgeCases(unittest.TestCase):
+    """分类器边界行为：引号、环境变量前缀、heredoc、退化输入与杂项语法"""
+
+    def setUp(self):
+        self.workspace = Path(__file__).parent.parent.resolve()
+        self.classifier = CommandClassifier(self.workspace)
+
+    def _safe(self, cmd):
+        is_safe, reason = self.classifier.classify(cmd)
+        self.assertTrue(is_safe, f"Expected safe for {cmd!r}, got: {reason}")
+
+    def _unsafe(self, cmd):
+        is_safe, reason = self.classifier.classify(cmd)
+        self.assertFalse(is_safe, f"Expected unsafe for {cmd!r}")
+
+    def test_sed_variants(self):
+        # 不带 -i 的 sed 仅打印，是只读的
+        self._safe("sed -n '1,50p' src/rove/main.py")
+        self._safe("sed 's/a/b/g' input.txt")
+        self._safe("sed -n 's/foo/bar/p' data.txt")
+        # 各种形式的就地修改都必须拦截
+        self._unsafe("sed -i 's/a/b/' f.txt")
+        self._unsafe("sed -i.bak 's/a/b/' f.txt")
+        self._unsafe("sed --in-place 's/a/b/' f.txt")
+        self._unsafe("sed --in-place=.bak 's/a/b/' f.txt")
+
+    def test_stream_dup_and_discard_redirections(self):
+        self._safe("cat missing.txt 2>/dev/null")
+        self._safe("cat missing.txt 2>&1")
+        self._safe("echo oops >&2")
+        self._safe("git log --oneline 2>/dev/null | head -5")
+
+    def test_heredoc_and_input_redirection_blocked(self):
+        self._unsafe("cat <<EOF")
+        self._unsafe("grep x < input.txt")
+        self._unsafe("wc -l <<< 'some text'")
+
+    def test_degenerate_inputs(self):
+        self._unsafe(";;")
+        self._unsafe("| cat")
+        self._unsafe("cat |")
+        is_safe, reason = self.classifier.classify("   ")
+        self.assertFalse(is_safe)
+        is_safe, reason = self.classifier.classify("")
+        self.assertFalse(is_safe)
+
+    def test_env_assignment_prefix(self):
+        self._safe("FOO=bar cat file.txt")
+        self._safe("FOO=bar BAZ=qux ls -la")
+        # 只有赋值没有命令：没有任何可执行内容，不放行
+        self._unsafe("FOO=bar")
+
+    def test_quoted_arguments(self):
+        self._safe("grep -n 'hello world' file.txt")
+        self._safe('echo "multi word string"')
+        self._safe('grep -rn "def main" src/')
+
+    def test_dollar_forms_all_blocked(self):
+        self._unsafe("echo $?")
+        self._unsafe("echo $$")
+        self._unsafe("grep foo$ file.txt")
+
+    def test_pipeline_stage_validation(self):
+        # xargs 可以接任意命令，属于逃逸面
+        self._unsafe("cat list.txt | xargs rm")
+        self._unsafe("cat a | gzip > out.gz")
+        # 全只读管道放行
+        self._safe("cat a.txt | sort | uniq | wc -l")
+
+    def test_find_writes_blocked_even_in_workspace(self):
+        # -fprintf 即使目标在工作区内也违背只读前提
+        self._unsafe("find . -fprintf out.txt '%p\\n'")
+
+    def test_cd_chain_readonly(self):
+        self._safe("cd src && ls && cat main.py")
+
+
+class TestApprovalStoreEdgeCases(unittest.TestCase):
+    """审批存储边界：键序无关、路径形态、前缀边界、线程安全"""
+
+    def test_exact_rule_key_order_independent(self):
+        store = SessionApprovalStore()
+        store.add_exact_rule("execute_python", {"a": 1, "b": {"c": 2, "d": 3}})
+        # canonicalize_arguments 按键排序，嵌套 dict 键序不同仍应命中
+        self.assertTrue(store.is_approved("execute_python", {"b": {"d": 3, "c": 2}, "a": 1}))
+        self.assertFalse(store.is_approved("execute_python", {"a": 1, "b": {"c": 2, "d": 4}}))
+
+    def test_path_rule_absolute_vs_relative(self):
+        store = SessionApprovalStore()
+        store.add_path_rule("write_file", "src/x.py")
+        # 相对与 ./ 前缀等价
+        self.assertTrue(store.is_approved("write_file", {"path": "./src/x.py"}))
+        # 绝对路径与相对路径是两个不同形态，不做等价（由策略层越界检查兜底）
+        self.assertFalse(store.is_approved("write_file", {"path": "/abs/src/x.py"}))
+
+    def test_prefix_rule_requires_whitespace_boundary(self):
+        store = SessionApprovalStore()
+        store.add_prefix_rule("bash", "pytest")
+        self.assertTrue(store.is_approved("bash", {"command": "pytest -v"}))
+        self.assertTrue(store.is_approved("bash", {"command": "pytest"}))
+        self.assertFalse(store.is_approved("bash", {"command": "pytest-cov run"}))
+
+    def test_concurrent_access_smoke(self):
+        import threading
+        store = SessionApprovalStore()
+        errors = []
+
+        def worker(i):
+            try:
+                for j in range(50):
+                    store.add_prefix_rule("bash", f"cmd{i}_{j}")
+                    store.is_approved("bash", {"command": f"cmd{i}_{j} x"})
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(store.list_rules()), 8 * 50)
+
+
+class TestPolicyArgumentValidation(unittest.TestCase):
+    """decide() 对畸形参数的防御"""
+
+    def setUp(self):
+        self.workspace = Path(__file__).parent.parent.resolve()
+        self.policy = PermissionPolicy(self.workspace, ApprovalMode.STRICT)
+
+    def test_non_string_command_denied(self):
+        decision, reason = self.policy.decide("bash", {"command": 12345})
+        self.assertEqual(decision, PermissionDecision.DENY)
+        self.assertIn("must be a string", reason)
+
+    def test_non_string_path_denied(self):
+        for tool in ("read_file", "write_file", "edit_file"):
+            decision, reason = self.policy.decide(tool, {"path": 123})
+            self.assertEqual(decision, PermissionDecision.DENY, tool)
+            self.assertIn("non-empty string", reason)
+
+    def test_empty_path_denied(self):
+        decision, _ = self.policy.decide("write_file", {"path": "   "})
+        self.assertEqual(decision, PermissionDecision.DENY)
+
+    def test_absolute_path_inside_workspace_not_denied(self):
+        inner = str(self.workspace / "notes.txt")
+        decision, _ = self.policy.decide("write_file", {"path": inner, "content": "x"})
+        self.assertEqual(decision, PermissionDecision.ASK)  # STRICT 模式：区内写入走审批而非拒绝
+
+    def test_run_background_shares_bash_policy(self):
+        decision, _ = self.policy.decide("run_background", {"command": "cat README.md"})
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+        decision, _ = self.policy.decide("run_background", {"command": "ls .."})
+        self.assertEqual(decision, PermissionDecision.DENY)
+
+    def test_unknown_tool_defaults_to_ask(self):
+        decision, _ = self.policy.decide("totally_new_tool", {"any": "args"})
+        self.assertEqual(decision, PermissionDecision.ASK)
+
+
+class TestApprovalManagerChoiceValidation(unittest.TestCase):
+    """CLI 审批交互的选项校验：不给 bash 发全工具放行、不认识的选择一律拒绝"""
+
+    def setUp(self):
+        self.store = SessionApprovalStore()
+        self.manager = ApprovalManager(self.store)
+
+    def test_tool_wide_choice_rejected_for_bash(self):
+        # bash 风险面过大，不允许 [t] 一键全放行
+        with patch("builtins.input", return_value="t"):
+            approved = self.manager.request("bash", {"command": "make build"}, "build")
+        self.assertFalse(approved)
+        self.assertEqual(self.store.list_rules(), [])
+
+    def test_prefix_choice_rejected_for_file_tools(self):
+        with patch("builtins.input", return_value="c"):
+            approved = self.manager.request("write_file", {"path": "a.py", "content": "x"}, "write")
+        self.assertFalse(approved)
+
+    def test_unknown_choice_denies(self):
+        with patch("builtins.input", return_value="maybe"):
+            approved = self.manager.request("bash", {"command": "ls"}, "list")
+        self.assertFalse(approved)
+
+    def test_exact_choice_stores_canonical_rule(self):
+        args = {"path": "src/a.py", "content": "v1"}
+        with patch("builtins.input", return_value="s"):
+            self.assertTrue(self.manager.request("write_file", args, "write"))
+        # exact 语义：canonicalize 键序无关，同一组参数的不同键序仍命中
+        self.assertTrue(self.store.is_approved("write_file", {"content": "v1", "path": "src/a.py"}))
+        # 任何参数值变化都不命中
+        self.assertFalse(self.store.is_approved("write_file", {"path": "src/a.py", "content": "v2"}))
+
+
 if __name__ == "__main__":
     unittest.main()
