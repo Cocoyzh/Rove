@@ -483,3 +483,114 @@ def test_run_pipeline_ordering(tmp_path):
     huge_msg = [m for m in processed if m.tool_call_id == "huge_call"][0]
     assert "<persisted-output>" in huge_msg.content
     assert "HUGE_DATA" in huge_msg.content
+
+
+# ---------------- 边界补充测试 ----------------
+def test_snip_boundary_exact_threshold():
+    """L1 门槛边界：恰好 60 条不剪，61 条才剪"""
+    from rove.compaction.compaction_layers import MAX_MESSAGES
+
+    def build(n):
+        msgs = [Message(role="user", content="开始")]
+        for i in range(n - 1):
+            # assistant 文本不是锚点，中段可被剪除
+            msgs.append(Message(role="assistant", content=f"推理消息 {i}"))
+        return msgs
+
+    at_limit = build(MAX_MESSAGES)
+    assert snip_compact(at_limit) == at_limit, "恰好达到阈值不应触发剪枝"
+
+    over_limit = build(MAX_MESSAGES + 1)
+    snipped = snip_compact(over_limit)
+    assert len(snipped) < len(over_limit)
+    assert any("[已压缩" in (m.content or "") for m in snipped)
+
+    # 锚点语义边界：全用户消息的会话里每条都是锚点，L1 无法缩减（设计使然）
+    all_user = [Message(role="user", content=f"用户消息 {i}") for i in range(MAX_MESSAGES + 1)]
+    assert len(snip_compact(all_user)) == len(all_user)
+
+
+def test_micro_compact_threshold_boundary(tmp_path):
+    """L2 阈值边界：恰好 4000 字符不处理，4001 才脱水并落盘"""
+    messages = [Message(role="user", content="x")]
+    for i, size in enumerate([COMPACT_THRESHOLD, COMPACT_THRESHOLD + 1] + [100] * 10):
+        messages.append(Message(
+            role="assistant",
+            tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="read", tool_args={})],
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"c_{i}", content=f"OUT_{i}: " + "Q" * (size - len(f"OUT_{i}: "))))
+
+    compacted = micro_compact(messages, tmp_path)
+    tool_msgs = [m for m in compacted if m.role == "tool"]
+
+    # 恰好等于阈值的完整保留（在 10 条保留窗口之外也不动）
+    assert tool_msgs[0].content.startswith("OUT_0:")
+    assert "<persisted-output>" not in tool_msgs[0].content
+    # 超一个字符即被落盘脱水
+    assert "<persisted-output>" in tool_msgs[1].content
+    assert (tmp_path / "c_1.txt").read_text(encoding="utf-8").startswith("OUT_1:")
+
+
+def test_build_summary_input_single_huge_message_fallback():
+    """单条消息即超预算的退化场景：硬截断兜底，输出非空且不超预算"""
+    from rove.compaction.compaction_layers import _build_summary_input, SUMMARY_CHAR_BUDGET
+
+    huge = Message(role="assistant", content="Z" * (SUMMARY_CHAR_BUDGET * 3))
+    out = _build_summary_input([huge])
+    assert 0 < len(out) <= SUMMARY_CHAR_BUDGET
+
+
+def test_run_pipeline_l2_fires_l1_skipped_when_few_messages():
+    """窗口 100k：~21k tokens 触发 L2（10% 水位），但消息数 ≤60 时 L1 必须跳过"""
+    messages = [Message(role="user", content="分析开始")]
+    for i in range(20):
+        messages.append(Message(
+            role="assistant",
+            tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="read", tool_args={})],
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"c_{i}", content="DATA " + "x" * 4800))
+    assert len(messages) == 41 <= 60
+
+    result = run_pipeline(DummyLLM(context_window=100_000), messages)
+    assert any("[Output truncated" in (m.content or "") for m in result), "L2 应已触发"
+    assert all("[已压缩" not in (m.content or "") for m in result), "L1 不应触发"
+
+
+def test_run_pipeline_l4_triggers_on_text_heavy_history():
+    """窗口 50k（L4 水位 20k）：纯文本长历史（L2 管不到）必须由 L4 摘要兜底"""
+    messages = [Message(role="user", content="目标：重构缓存层")]
+    for i in range(40):
+        messages.append(Message(role="assistant", content=f"step {i}: " + "y" * 3000))
+
+    result = run_pipeline(DummyLLM(context_window=50_000), messages)
+    assert "[对话已压缩]" in (result[0].content or ""), "L4 摘要必须触发"
+    # 尾部活跃消息保留
+    assert any("step 39" in (m.content or "") for m in result[1:])
+
+
+def test_reactive_compact_pair_integrity():
+    """应急压缩后 tool_use/tool_result 配对完整，adapter 转换角色严格交替"""
+    messages = [Message(role="user", content="排查问题")]
+    for i in range(30):
+        messages.append(Message(
+            role="assistant",
+            content=f"thinking {i}",
+            tool_calls=[ToolCall(tool_id=f"tc_{i}", tool_name="read", tool_args={})],
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"tc_{i}", content=f"out {i}"))
+
+    from rove.compaction.compaction_layers import reactive_compact
+    compacted = reactive_compact(DummyLLM(), messages)
+    assert "[应急压缩]" in (compacted[0].content or "")
+
+    converted = AnthropicLLMAdapter._convert_messages(compacted)
+    for i in range(len(converted) - 1):
+        assert converted[i]["role"] != converted[i + 1]["role"], f"相邻同角色 at {i}"
+
+
+def test_estimate_tokens_counts_tool_call_args():
+    """全量估算路径（无 llm）：tool_calls 参数体积必须计入"""
+    small = [Message(role="assistant", tool_calls=[ToolCall(tool_id="t", tool_name="bash", tool_args={"command": "ls"})])]
+    big = [Message(role="assistant", tool_calls=[ToolCall(tool_id="t", tool_name="bash", tool_args={"command": "cat " + "f " * 3000})])]
+
+    assert estimate_messages_tokens(big) > estimate_messages_tokens(small) + 500
