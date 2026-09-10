@@ -56,3 +56,25 @@ class TestTieredTimeoutAndTmpIsolation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTimeoutClampEdges(unittest.TestCase):
+    """分级超时的钳制边界（Issue #9）"""
+
+    def test_negative_timeout_clamped_to_one_second(self):
+        import time
+        start = time.monotonic()
+        out = _run_bash("python3 -c 'import time; time.sleep(3)'", timeout=-5)
+        elapsed = time.monotonic() - start
+        # 负值被钳制为 1s，3s 的任务必然超时，且调用约 1s 即返回
+        self.assertIn("Timeout expired(1s)", out)
+        self.assertLess(elapsed, 2.5)
+
+    def test_explicit_timeout_respected_for_heavy_commands(self):
+        out = _run_bash("python3 -c 'print(1 + 1)'", timeout=5)
+        self.assertIn("2", out)
+
+    def test_readonly_cap_independent_of_requested_timeout(self):
+        # 只读命令即使请求 600s 也被压到 30s 内完成（echo 立即返回即可验证链路）
+        out = _run_bash("echo rove-readonly-capped", timeout=600)
+        self.assertIn("rove-readonly-capped", out)

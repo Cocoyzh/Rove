@@ -119,12 +119,15 @@ def _extract_rtf_text(data: bytes) -> str:
     """最小化 RTF 转纯文本：处理 \\uN 与 \\'hh 转义、\\par 段落，
     剥离其余控制字与花括号分组，保留文本内容。"""
     text = data.decode("ascii", errors="ignore")
+    # 第一步先保护转义对（\{ \} \\），否则 'C:\\temp' 的 'temp' 会被
+    # 误当成控制字、字面花括号会与分组括号一起被误删
+    text = re.sub(r"\\([{}\\])", lambda m: {"{": "\x00", "}": "\x01", "\\": "\x02"}[m.group(1)], text)
     text = re.sub(r"\\u(-?\d+)\s?\??", lambda m: chr(int(m.group(1)) & 0xFFFF), text)
     text = re.sub(r"\\'([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), text)
     text = re.sub(r"\\par[d]?\b", "\n", text)
     text = re.sub(r"\\[a-zA-Z]+-?\d*\s?", "", text)
     text = text.replace("{", "").replace("}", "")
-    return text.replace("\\{", "{").replace("\\}", "}").replace("\\\\", "\\")
+    return text.replace("\x00", "{").replace("\x01", "}").replace("\x02", "\\")
 
 
 def _extract_pdf_text(fp: Path) -> str:

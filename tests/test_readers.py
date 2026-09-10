@@ -121,3 +121,102 @@ class TestReadNotebook(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRtfEscapeEdgeCases(unittest.TestCase):
+    """RTF 转义字符边界：\\{ \\} \\\\ 必须先还原再剥组括号"""
+
+    def test_escaped_braces_preserved(self):
+        rtf = rb"{\rtf1\ansi code: a\{b\}c\par}"
+        text = _extract_rtf_text(rtf)
+        self.assertIn("a{b}c", text)
+
+    def test_escaped_backslash_preserved(self):
+        rtf = rb"{\rtf1 path C:\\temp\par}"
+        text = _extract_rtf_text(rtf)
+        self.assertIn("C:\\temp", text)
+
+    def test_group_braces_still_stripped(self):
+        rtf = rb"{\rtf1{\fonttbl{\f0 Courier;}}plain text\par}"
+        text = _extract_rtf_text(rtf)
+        self.assertIn("plain text", text)
+        self.assertNotIn("fonttbl", text)
+
+
+class TestEncodingEdgeCases(unittest.TestCase):
+    """编码与二进制嗅探边界"""
+
+    def setUp(self):
+        self.workspace = _WORKSPACE
+        self.scratch = _scratch_dir()
+
+    def _rel(self, name, data):
+        return _write_scratch(self.scratch, name, data)
+
+    def test_utf8_sig_detected_and_read(self):
+        name = self._rel("bom.txt", "带 BOM 的中文内容".encode("utf-8-sig"))
+        self.assertEqual(sniff_file_type(self.workspace / name), "utf8-sig-text")
+        out = _run_read(name)
+        self.assertIn("带 BOM 的中文内容", out)
+
+    def test_utf16_detected_and_read(self):
+        name = self._rel("u16.txt", "UTF-16 中文".encode("utf-16"))
+        self.assertEqual(sniff_file_type(self.workspace / name), "utf16-text")
+        out = _run_read(name)
+        self.assertIn("UTF-16 中文", out)
+
+    def test_png_magic_refused(self):
+        name = self._rel("img.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        out = _run_read(name)
+        self.assertTrue(out.startswith("Error:"), out)
+        self.assertIn("binary", out)
+
+    def test_missing_file_returns_error(self):
+        out = _run_read("no/such/file_xyz.txt")
+        self.assertTrue(out.startswith("Error:"), out)
+
+
+class TestNotebookEdgeCases(unittest.TestCase):
+    """read_notebook 边界：纯 Markdown、空 notebook、无输出 cell"""
+
+    def setUp(self):
+        self.workspace = _WORKSPACE
+        self.scratch = _scratch_dir()
+
+    def _write_nb(self, name, nb):
+        rel = _write_scratch(self.scratch, name)
+        (self.workspace / rel).write_text(json.dumps(nb), encoding="utf-8")
+        return rel
+
+    def test_markdown_only_notebook(self):
+        rel = self._write_nb("md_only.ipynb", {
+            "cells": [{"cell_type": "markdown", "source": ["# 只有文档"]}],
+        })
+        out = _run_read_notebook(rel)
+        self.assertIn("[markdown]", out)
+        self.assertIn("# 只有文档", out)
+        self.assertNotIn("--- outputs", out)
+
+    def test_empty_notebook(self):
+        rel = self._write_nb("empty.ipynb", {"cells": []})
+        out = _run_read_notebook(rel)
+        self.assertIn("0 cells", out)
+
+    def test_code_cell_without_outputs(self):
+        rel = self._write_nb("no_out.ipynb", {
+            "cells": [{"cell_type": "code", "source": ["x = 1"]}],
+        })
+        out = _run_read_notebook(rel)
+        self.assertIn("x = 1", out)
+        self.assertIn("0 items", out)
+
+    def test_execute_result_text_plain(self):
+        rel = self._write_nb("result.ipynb", {
+            "cells": [{
+                "cell_type": "code", "execution_count": 1, "source": ["1+1"],
+                "outputs": [{"output_type": "execute_result",
+                             "data": {"text/plain": ["42"]}}],
+            }],
+        })
+        out = _run_read_notebook(rel)
+        self.assertIn("[execute_result] 42", out)

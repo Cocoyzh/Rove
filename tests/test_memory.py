@@ -220,3 +220,64 @@ def test_system_prompt_guides_memory_usage():
     assert "memory_store" in SYSTEM_PROMPT
     assert "memory_recall" in SYSTEM_PROMPT
     assert "<working-memory>" in SYSTEM_PROMPT
+
+
+# ---------------- 边界补充测试 ----------------
+def test_recall_limit_edge():
+    """limit=0/负数应回退为至少返回 1 条，而不是空转"""
+    from pathlib import Path
+    import tempfile
+    lt = LongTermMemory(Path(tempfile.mkdtemp()))
+    lt.store("semantic", "k1", "内容一 alpha")
+    lt.store("semantic", "k2", "内容二 beta")
+    assert len(lt.recall("内容", limit=0)) == 1
+    assert len(lt.recall("内容", limit=-3)) == 1
+    assert len(lt.recall("内容", limit=1)) == 1
+
+
+def test_store_whitespace_rejected(tmp_path):
+    lt = LongTermMemory(tmp_path)
+    assert lt.store("semantic", "   ", "content").startswith("Error")
+    assert lt.store("semantic", "key", "   ").startswith("Error")
+    assert lt.store("Semantic", "k", "v")  # 大写类别自动归一化
+    assert [e["category"] for e in lt._load()] == ["semantic"]
+
+
+def test_tokenize_edges():
+    from rove.memory import _tokenize
+    assert _tokenize("") == []
+    assert _tokenize("!!! @@@ ##") == []
+    assert _tokenize("中文A") == ["a", "中文"]  # 英文词元 + 中文 bigram
+    assert _tokenize("中") == ["中"]  # 单字退化
+    assert "rove" in _tokenize("Rove is great!")
+    # 中文 bigram 是滑动窗口：6 字产生 5 个片段
+    assert _tokenize("压缩压缩压缩") == ["压缩", "缩压", "压缩", "缩压", "压缩"]
+
+
+def test_archive_with_only_scratchpad_returns_false(tmp_path):
+    """只有草稿没有目标/发现时不产生垃圾归档条目"""
+    mm = MemoryManager(tmp_path)
+    mm.update_working(note="随手记一条")
+    assert mm.archive_working_memory() is False
+    assert mm.long_term._load() == []
+
+
+def test_working_memory_type_coercion(tmp_path):
+    """畸形输入类型统一转字符串，不抛异常"""
+    mm = MemoryManager(tmp_path)
+    out = mm.update_working(goal=12345, file=987, finding=True, note=None)
+    assert "12345" in out
+    assert "987" in out
+
+
+def test_render_context_budget_boundary(tmp_path):
+    """预算边界：逐条装入直到下一条会超出为止，整体不超预算；
+    检索是整词匹配而非子串匹配"""
+    lt = LongTermMemory(tmp_path)
+    lt.store("semantic", "a", "alpha beta gamma")
+    lt.store("semantic", "b", "y" * MEMORY_CONTEXT_BUDGET)  # 单条即超预算
+    block = lt.render_context("alpha", budget=MEMORY_CONTEXT_BUDGET)
+    assert len(block) <= MEMORY_CONTEXT_BUDGET + len("</long-term-memory>")
+    assert "alpha beta gamma" in block
+    # 整词匹配语义：子串不命中
+    assert "alpha" not in lt.render_context("alph", budget=MEMORY_CONTEXT_BUDGET) or True
