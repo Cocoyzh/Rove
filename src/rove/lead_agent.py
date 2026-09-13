@@ -74,6 +74,7 @@ class LeadAgent:
         reactive_retries = 0    # 应急压缩重试计数
         total_input_tokens = 0
         total_output_tokens = 0
+        total_cache_read = 0
 
         try:
             for step in range(self.max_steps):
@@ -99,8 +100,9 @@ class LeadAgent:
                     if response.content:
                         console.print()
                     if response.usage:
-                        total_input_tokens += response.usage.input_tokens
+                        total_input_tokens += response.usage.context_input_tokens
                         total_output_tokens += response.usage.output_tokens
+                        total_cache_read += response.usage.cache_read_tokens
                     reactive_retries = 0
                 except Exception as e:
                     if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) \
@@ -156,4 +158,5 @@ class LeadAgent:
 
             return "Error: max_steps exceeded before the agent finished."
         finally:
-            console.print(f"[dim]⚡ In: {total_input_tokens} · Out: {total_output_tokens}[/dim]")
+            hit_pct = total_cache_read / total_input_tokens * 100 if total_input_tokens else 0
+            console.print(f"[dim]⚡ In: {total_input_tokens} (缓存命中 {hit_pct:.0f}%) · Out: {total_output_tokens}[/dim]")

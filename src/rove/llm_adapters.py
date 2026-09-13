@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Callable
 from rove.llm import LLMResponse, LLMRequest, Usage
 from rove.messages import Message, ToolCall
+from rove.usage_ledger import LEDGER
 import time
 
 CONTEXT_WINDOWS = {
@@ -15,6 +16,37 @@ DEFAULT_CONTEXT_WINDOW = 1_000_000
 # 供下游（如 L4 摘要）识别"拿到的是思维链碎片而非正式产出"
 THINKING_FALLBACK_MARKER = "*(思考中已达Token上限)*"
 
+
+def _usage_get(raw: object, name: str):
+    """兼容对象与 dict 两种 usage 载体取字段，缺失一律回 0。"""
+    if raw is None:
+        return 0
+    if isinstance(raw, dict):
+        return raw.get(name) or 0
+    return getattr(raw, name, 0) or 0
+
+
+def _normalize_usage(raw) -> "Usage":
+    """把 Anthropic / GLM 兼容层两种 usage 形态归一化为 Usage。
+
+    - Anthropic 口径：input_tokens 已剔除缓存部分，缓存读/写单列字段；
+    - GLM(OpenAI 风格) 口径：prompt 总量含命中部分，仅有
+      prompt_tokens_details.cached_tokens 时未命中输入 = 总量 - 命中。
+    """
+    input_tokens = _usage_get(raw, "input_tokens") or _usage_get(raw, "prompt_tokens")
+    output_tokens = _usage_get(raw, "output_tokens") or _usage_get(raw, "completion_tokens")
+    cache_read = _usage_get(raw, "cache_read_input_tokens")
+    cache_creation = _usage_get(raw, "cache_creation_input_tokens")
+    if not cache_read:
+        cached = _usage_get(_usage_get(raw, "prompt_tokens_details"), "cached_tokens")
+        if cached:
+            cache_read = cached
+            input_tokens = max(0, input_tokens - cached)
+    return Usage(input_tokens=int(input_tokens),
+                 output_tokens=int(output_tokens),
+                 cache_read_tokens=int(cache_read),
+                 cache_creation_tokens=int(cache_creation))
+
 class BaseLLMAdapter(ABC):
     def __init__(self, model: str, api_key: str, base_url: Optional[str], timeout: Optional[int],
                  context_window: Optional[int] = None):
@@ -25,6 +57,8 @@ class BaseLLMAdapter(ABC):
         self._client = None
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.total_cache_read_tokens = 0
+        self.total_cache_creation_tokens = 0
         self.call_count = 0
         self.last_input_tokens = 0
         self.last_output_tokens = 0
@@ -33,11 +67,19 @@ class BaseLLMAdapter(ABC):
 
     def _record_usage(self, response: LLMResponse) -> LLMResponse:
         if response.usage:
-            self.total_input_tokens += response.usage.input_tokens
-            self.total_output_tokens += response.usage.output_tokens
+            usage = response.usage
+            # total_input_tokens 维持"全部输入规模"口径（未命中 + 缓存读 + 缓存写），
+            # 与上下文占用、成本汇总的历史语义一致；缓存明细单独累计
+            self.total_input_tokens += usage.context_input_tokens
+            self.total_output_tokens += usage.output_tokens
+            self.total_cache_read_tokens += usage.cache_read_tokens
+            self.total_cache_creation_tokens += usage.cache_creation_tokens
             self.call_count += 1
-            self.last_input_tokens = response.usage.input_tokens
-            self.last_output_tokens = response.usage.output_tokens
+            self.last_input_tokens = usage.context_input_tokens
+            self.last_output_tokens = usage.output_tokens
+
+            LEDGER.record(model=response.model or self.model,
+                          usage=usage, latency_ms=response.latency_ms)
 
             content = response.content or ""
             c_len = len(content)
@@ -142,13 +184,9 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
                     text = f"{THINKING_FALLBACK_MARKER}: {block.thinking[:200]}..."
                     break
         usage = None
-        if hasattr(message, "usage"):
-            cache_read = getattr(message.usage, "cache_read_input_tokens", 0) or 0
-            cache_creation = getattr(message.usage, "cache_creation_input_tokens", 0) or 0
-            raw_input = getattr(message.usage, "input_tokens", 0) or 0
-            total_input = raw_input + cache_read + cache_creation
-            usage = Usage(input_tokens=total_input,
-                          output_tokens=getattr(message.usage, "output_tokens", 0) or 0)
+        if hasattr(message, "usage") and message.usage is not None:
+            # 保留缓存读/写原始值，不再合并进 input_tokens 丢弃
+            usage = _normalize_usage(message.usage)
         return LLMResponse(
             content=text,
             tool_calls=tool_calls,
