@@ -1,7 +1,7 @@
 # Plan：提高模型调用命中率，降低推理成本（context-optimize）
 
 > 分支：`context-optimize`（基于 `Optimize` @ c6e62b1 切出）
-> 状态：方案文档，待实现会话认领执行
+> 状态：P0（可观测性）与 P1（前缀稳定化）已实现并合入本分支；P2/P3/P4 待实现
 > 关联：《git-workflow.md》——实现开工时建议先提 issue 并将分支重命名为 `feat/<n>-context-optimize`
 
 ## 1. 背景与目标
@@ -128,3 +128,27 @@
 - [An Evaluation of Prompt Caching for Long-Horizon Agentic Workloads (arXiv)](https://arxiv.org/html/2601.06007v2)
 - [Claude Code prompt caching 实解](https://www.claudecodecamp.com/p/how-prompt-caching-actually-works-in-claude-code)
 - [5min vs 1h TTL](https://www.padiso.co/blog/prompt-caching-system-prompts-5-minute-vs-1-hour-ttl/) / [TTL 过期重算 issue](https://github.com/anthropics/claude-code/issues/46829)
+
+## 8. 实施记录（P0/P1）
+
+### P0 可观测性（已实现）
+
+- `Usage` 增加 `cache_read_tokens` / `cache_creation_tokens`；`input_tokens` 回归 API 原始口径（未命中输入），`context_input_tokens` 表达全部输入规模，`cache_hit_rate` 即 §4-P0-2 公式。`_build_response` 不再合并丢弃缓存字段；`_normalize_usage` 兼容 GLM `prompt_tokens_details.cached_tokens` 形态（OpenAI 口径：未命中 = prompt 总量 − 命中）。
+- 新增 `src/rove/usage_ledger.py`：每次调用（lead/teammate/L4 摘要统一经 `_record_usage`）向 `.rove/sessions/usage_ledger.jsonl` 追加 `model/input/output/cache_read/cache_creation/latency_ms/hit_rate`，进程内聚合与成本估算（内置定价表常量 `MODEL_PRICING`，环境变量覆盖留待后续）。落盘失败静默，绝不影响主流程；`tests/conftest.py` 将台账隔离到 tmp_path。
+- REPL：`/stats` 与退出时"会话结束小结"展示调用数 / 总 token / 命中率 / 估算成本；run 循环底部 `⚡` 行展示当轮命中百分比。
+- Web：`/api/system/status` 返回 `cache_read_tokens / cache_creation_tokens / cache_hit_rate`，侧边栏状态卡新增"缓存命中"行（进程级口径）。
+- 注：adapter `total_input_tokens` 维持"全部输入规模"历史口径（未命中 + 缓存读 + 缓存写），上下文占用与 compaction 校准语义不变。
+
+### P1 前缀稳定化（已实现）
+
+- 黑板迁出 system prompt：`_build_system_prompt()` 返回静态 `SYSTEM_PROMPT`；`MemoryManager.build_system_context()` 的产出（黑板 + 长期记忆检索）每回合经 `LeadAgent._inject_memory_turn()` 作为尾部合成 user 消息注入（`run_pipeline` 之后、调用之前）。内容与历史中最后一条记忆消息一致时跳过（去重省 token），变化时追加新副本、旧副本留在历史原样不动——前缀只增不改。
+- 注入统一走 `lead_agent._inject_synthetic()`（§6 约定）：inbox / background-results / reminder / 记忆块全部经此入口；Web 侧 `WebLeadAgent.run` 同步改造。
+- L1 协同：`ANCHOR_EXCLUDED_PREFIXES` 增加 `<working-memory>` / `<long-term-memory>`，记忆消息不享有用户锚点保护（每回合重注，旧副本可剪）；会话自动标题提取同步排除。
+- 工具定义：`ToolRegistry.get_schemas()` 按名称排序导出，逐字节稳定。
+- 序列化确定性：`_convert_messages` 无时间戳/随机 id 混入，测试以 json.dumps 键序敏感比较固化（`test_convert_messages_serialization_deterministic`）。
+- 度量脚本：`scripts/cache_hitrate_bench.py`（固定 10 轮任务脚本，聚合命中率 + PASS/BELOW 判定）。**线上验收数据（≥70%）待在配置了 `LLM_*` 的环境运行脚本回填**：基线分支与本分支各跑一次对比。
+
+### 涉及文件与测试
+
+- 代码：`llm.py`、`llm_adapters.py`、`usage_ledger.py`（新）、`main.py`、`lead_agent.py`、`web/agent_runner.py`、`web/app.py`、`web/session_manager.py`、`compaction/compaction_layers.py`（仅锚点排除表）、`prompt/system_prompt.py`（文案）、`memory.py`（文档）、`tool_registry.py`、`frontend` 类型与 Sidebar。
+- 测试：`tests/test_usage_ledger.py`（14 项）、`tests/test_prefix_stability.py`（10 项）、`test_compaction.py` 增记忆锚点排除项。全量 `PYTHONPATH=src python -m pytest tests/ -q` 绿；`tsc --noEmit` 通过。
