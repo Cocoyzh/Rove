@@ -9,6 +9,7 @@ from rove.tools.web_search import web_search_tool
 from rove.task_manager import TaskManager
 from rove.tools.team_tool import build_team_tools
 from rove.tools.agent_teams import TeammateManager
+from rove.tools.subagent import SubagentManager, build_subagent_tool
 from rove.tools.file_tools import FILE_TOOLS
 from rove.permissions import APPROVAL_MANAGER, PermissionPolicy
 from rove.paths import WORKSPACE_ROOT
@@ -33,6 +34,12 @@ def build_default_registry(
         web_search_tool,
         run_bg_tool,
         check_bg_tool,
+        # 一次性子代理：权限策略复用 lead 实例（模式切换同步生效），
+        # 不入 _ALLOWED_TOOLS / _ASK_TOOLS，默认走 ASK 兜底审批
+        build_subagent_tool(SubagentManager(
+            team_manager.llm,
+            permission_policy=registry.permission_policy,
+        )),
     ])
 
     return registry
