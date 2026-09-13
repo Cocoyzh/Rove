@@ -1,7 +1,7 @@
 # Plan：优化默认 Single Agent + SubAgent 模式（subagent-optimize）
 
 > 分支：`subagent-optimize`（基于 `Optimize` @ c6e62b1 切出；分支名沿用前两个计划的扁平命名风格）
-> 状态：方案文档，待实现会话认领执行
+> 状态：P0–P4 已实现（harness 就绪），评测结果待真实跑批回填
 > 关联：《git-workflow.md》——实现开工时建议先提 issue 并将分支重命名为 `feat/<n>-subagent-optimize`
 
 ## 1. 背景与目标
@@ -110,3 +110,29 @@ Rove 当前的多 Agent 形态是"lead 单循环 + 常驻异步 Teammate"：team
 - [Context Engineering 101: How Agents Manage Context](https://newsletter.victordibia.com/p/context-engineering-101-how-agents)
 - [Claude Code Sub-Agents: Split Tasks Across Experts](https://claudefa.st/blog/guide/agents/sub-agent-design)
 - [HN：subagent 与 context wrangling 的批评视角](https://news.ycombinator.com/item?id=45181577)
+
+## 8. 附录：P4 效果评测（harness 就绪，结果待真实跑批）
+
+评测 harness：`src/rove/benchmarks/subagent_eval.py` + 任务集 `tasks_subagent_eval.jsonl`（5 探索 + 5 修改，
+setup/verify 自包含）。三种跑法（纯 lead / lead+teammate / lead+dispatch_subagent）各跑同一任务集，
+记录成功率、lead 上下文峰值 token、总成本（按模型计价）、墙钟时间。
+
+执行（需 `.env` 配置 `LLM_API_KEY`，全程无人值守，建议预留 30–60 分钟与相应 API 预算）：
+
+```bash
+python -m rove.benchmarks.subagent_eval run \
+    --tasks src/rove/benchmarks/tasks_subagent_eval.jsonl \
+    --out .rove/eval/results.json \
+    --append-plan plans/subagent-optimize.md
+```
+
+跑批结束后对比表会自动追加到本附录下方。可选：配置 `LLM_FAST_MODEL_ID` 后重跑一轮，
+验证探索类子代理路由廉价模型的成本/质量差异。
+
+### 待回填结果
+
+| 跑法 | 任务数 | 成功率 | lead 上下文峰值 (avg) | 总成本 USD | 墙钟 avg (s) |
+|---|---|---|---|---|---|
+| 纯 lead | — | 待跑批 | — | — | — |
+| lead+teammate | — | 待跑批 | — | — | — |
+| lead+dispatch_subagent | — | 待跑批 | — | — | — |
