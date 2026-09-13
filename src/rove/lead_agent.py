@@ -42,6 +42,21 @@ def _inject_synthetic(messages: List[Message], content: str) -> None:
 # 记忆回合注入消息的识别前缀（与 L1 锚点排除表、会话标题提取共用同一组标签）
 MEMORY_TURN_PREFIXES = ("<working-memory>", "<long-term-memory>")
 
+# 工具失败原因归类：按错误输出前缀识别（context-optimize P3）
+FAILURE_CATEGORY_PREFIXES = (
+    ("unknown tool", "unknown_tool"),
+    ("permission denied", "permission"),
+    ("error: 参数校验失败", "schema"),
+)
+
+
+def _categorize_failure(output: str) -> str:
+    head = str(output).strip().lower()
+    for prefix, category in FAILURE_CATEGORY_PREFIXES:
+        if head.startswith(prefix):
+            return category
+    return "exception"
+
 
 class LeadAgent:
     def __init__(self, llm: BaseLLMAdapter, registry: ToolRegistry, max_steps: int = 50):
@@ -50,6 +65,7 @@ class LeadAgent:
         self.max_steps = max_steps
         self.messages: List[Message] = []
         self.tools = registry.get_schemas()
+        self._tool_failures: dict = {}   # (tool_name, category) -> 连续出现次数
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
 
@@ -57,6 +73,7 @@ class LeadAgent:
         """清空对话历史，开始新会话。工作记忆快照归档进长期记忆（轻量反思）。"""
         MEMORY.archive_working_memory()
         self.messages = []
+        self._tool_failures = {}
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
 
@@ -93,6 +110,25 @@ class LeadAgent:
                     return
                 break
         _inject_synthetic(self.messages, content)
+
+    def _handle_tool_failure(self, tool_name: str, output: str) -> None:
+        """失败经验沉淀（P3）：同类失败（工具名+原因类别）入长期记忆，
+        第二次出现时在尾部注入规避提示，让模型先修正再重试。"""
+        category = _categorize_failure(output)
+        key = (tool_name, category)
+        self._tool_failures[key] = self._tool_failures.get(key, 0) + 1
+        count = self._tool_failures[key]
+        try:
+            MEMORY.long_term.store("episodic", f"tool_fail_{tool_name}_{category}",
+                                   f"工具 {tool_name} 因 {category} 失败：{output[:200]}")
+        except Exception:
+            pass  # 记忆写入失败不影响主流程
+        if count >= 2:
+            _inject_synthetic(
+                self.messages,
+                f"<tool-failure-hint>此前 {tool_name} 已因 {category} 失败 {count} 次"
+                f"（最近错误：{output[:150]}）。请先修正调用方式再重试；"
+                f"若是权限拒绝，不要尝试绕过。</tool-failure-hint>")
 
     def run(self, query: str) -> str:
         self.messages.append(Message(role="user", content=query))
@@ -166,6 +202,9 @@ class LeadAgent:
                     self.messages.append(Message(role="tool",
                                                  tool_call_id=tool.tool_id,
                                                  content=str(output)))
+
+                    if is_error:
+                        self._handle_tool_failure(tool.tool_name, str(output))
 
                     if tool.tool_name == "todo":
                         used_todo = True

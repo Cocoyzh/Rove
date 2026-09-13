@@ -66,7 +66,12 @@ def fast_estimate_text_tokens(text: str, cjk_ratio: float = 1.3) -> int:
 
 
 def estimate_messages_tokens(messages: list[Message], llm: BaseLLMAdapter | None = None) -> int:
-    """估算消息列表的 Token 数量。支持基于 llm 的增量与自适应分词校准。"""
+    """估算消息列表的 Token 数量。支持基于 llm 的增量与自适应分词校准。
+
+    纯估算路径（无 API 实测锚点时）乘以 estimate_scale——P4 用历史调用的
+    真实输入规模校准出的系统偏差（含 system prompt / 工具定义开销）；
+    增量校准路径本身以真实 last_input_tokens 为基，不再叠加。
+    """
     cjk_ratio = getattr(llm, "cjk_token_ratio", 1.3) if llm else 1.3
 
     if llm and getattr(llm, "last_input_tokens", 0) > 0:
@@ -93,7 +98,8 @@ def estimate_messages_tokens(messages: list[Message], llm: BaseLLMAdapter | None
             for tc in msg.tool_calls:
                 args_str = json.dumps(tc.tool_args, ensure_ascii=False)
                 total += len(tc.tool_name) + int(len(args_str) / 3.5) + 10
-    return total
+    scale = getattr(llm, "estimate_scale", 1.0) if llm else 1.0
+    return int(total * scale)
 
 
 def _has_tool_use(msg: Message) -> bool:
@@ -224,6 +230,7 @@ ANCHOR_EXCLUDED_PREFIXES = (
     "[已压缩", "[对话已压缩]", "[应急压缩]",
     "<reminder>", "<inbox>", "<background-results>",
     "<working-memory>", "<long-term-memory>",
+    "<tool-failure-hint>",
 )
 
 
@@ -434,19 +441,29 @@ def run_pipeline(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) 
 
     current_tokens = estimate_messages_tokens(messages, llm=llm)
 
+    compacted = False
     l2_limit = int(context_window * L2_WATERMARK_RATIO)
     if current_tokens >= l2_limit:
         messages[:] = micro_compact(messages, TOOL_RESULTS_DIR)
         current_tokens = estimate_messages_tokens(messages)
+        compacted = True
 
     l1_limit = int(context_window * L1_WATERMARK_RATIO)
     if current_tokens >= l1_limit and len(messages) > MAX_MESSAGES:
         messages[:] = snip_compact(messages)
         current_tokens = estimate_messages_tokens(messages)
+        compacted = True
 
     l4_limit = int(context_window * L4_WATERMARK_RATIO)
     if current_tokens > l4_limit:
         console.print("[bold yellow]⚠ 上下文超标，触发 L4 摘要[/bold yellow]")
         messages[:] = compact_history(llm, messages, on_summary=on_summary)
+        compacted = True
+
+    # P4：水位触发误差校准——把"本轮发往 API 的全部输入估算"挂到 adapter 上，
+    # API 返回后用真实 token 数修正 estimate_scale（见 BaseLLMAdapter._record_usage）。
+    # 压缩改写过的轮次估算失真，跳过校准避免系统性污染。
+    if hasattr(llm, "set_pending_estimate"):
+        llm.set_pending_estimate(None if compacted else current_tokens)
 
     return messages

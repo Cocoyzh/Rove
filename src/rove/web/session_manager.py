@@ -169,7 +169,7 @@ class SessionManager:
                     for m in messages:
                         if m.role == "user" and m.content and not m.content.startswith(
                             ("<inbox>", "<background-results>", "<reminder>",
-                             "<working-memory>", "<long-term-memory>")
+                             "<working-memory>", "<long-term-memory>", "<tool-failure-hint>")
                         ):
                             summary = m.content.strip().splitlines()[0][:25]
                             if summary:

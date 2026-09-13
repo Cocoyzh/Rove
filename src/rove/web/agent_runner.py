@@ -148,6 +148,9 @@ class WebLeadAgent(LeadAgent):
                         Message(role="tool", tool_call_id=tool.tool_id, content=output_str)
                     )
 
+                    if is_error:
+                        self._handle_tool_failure(tool.tool_name, output_str)
+
                     if tool.tool_name == "todo":
                         used_todo = True
 
