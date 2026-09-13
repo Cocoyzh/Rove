@@ -95,5 +95,8 @@ export interface SystemStatus {
   project_total_tokens?: number;
   total_input_tokens?: number;
   total_output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  cache_hit_rate?: number;
   call_count?: number;
 }
