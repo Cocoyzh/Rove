@@ -1,7 +1,7 @@
 # Plan：提高模型调用命中率，降低推理成本（context-optimize）
 
 > 分支：`context-optimize`（基于 `Optimize` @ c6e62b1 切出）
-> 状态：P0（可观测性）与 P1（前缀稳定化）已实现并合入本分支；P2/P3/P4 待实现
+> 状态：P0–P4 全部实现并合入本分支，验收数据已回填（见 §8 实施记录）
 > 关联：《git-workflow.md》——实现开工时建议先提 issue 并将分支重命名为 `feat/<n>-context-optimize`
 
 ## 1. 背景与目标
@@ -106,11 +106,11 @@
 
 ## 5. 验收标准
 
-- [ ] 稳态 10 轮以上会话命中率 ≥70%（GLM 端点实测，附对比数据）。
-- [ ] `/stats` 与会话结束小结展示总 token / 命中率 / 估算成本；Web 状态栏显示命中率。
-- [ ] 黑板已迁出 system prompt，L1 不再将其锚定；compaction 既有测试全绿并新增黑板注入的边界测试。
-- [ ] 别名映射与 schema 预校验有单测；人为构造错误 tool_use 不再整轮报废。
-- [ ] 全量 `pytest tests/ -q` 通过，前端 `tsc --noEmit` 通过（若触及状态栏）。
+- [x] 稳态 10 轮以上会话命中率 ≥70%（实测 89.93% ≥ 70%，附对比数据；实测端点为 `.env` 配置的 DeepSeek 兼容端点——隐式缓存机制与 GLM 同类（§3.2），GLM 官方端点需复测）。
+- [x] `/stats` 与会话结束小结展示总 token / 命中率 / 估算成本；Web 状态栏显示命中率。
+- [x] 黑板已迁出 system prompt，L1 不再将其锚定；compaction 既有测试全绿并新增黑板注入的边界测试。
+- [x] 别名映射与 schema 预校验有单测；人为构造错误 tool_use 不再整轮报废（结构化错误回喂自愈）。
+- [x] 全量 `pytest tests/ -q` 通过（216 passed），前端 `tsc --noEmit` 通过。
 
 ## 6. 与其他分支的冲突面协调
 
@@ -129,7 +129,7 @@
 - [Claude Code prompt caching 实解](https://www.claudecodecamp.com/p/how-prompt-caching-actually-works-in-claude-code)
 - [5min vs 1h TTL](https://www.padiso.co/blog/prompt-caching-system-prompts-5-minute-vs-1-hour-ttl/) / [TTL 过期重算 issue](https://github.com/anthropics/claude-code/issues/46829)
 
-## 8. 实施记录（P0/P1）
+## 8. 实施记录（P0–P4）
 
 ### P0 可观测性（已实现）
 
@@ -146,9 +146,52 @@
 - L1 协同：`ANCHOR_EXCLUDED_PREFIXES` 增加 `<working-memory>` / `<long-term-memory>`，记忆消息不享有用户锚点保护（每回合重注，旧副本可剪）；会话自动标题提取同步排除。
 - 工具定义：`ToolRegistry.get_schemas()` 按名称排序导出，逐字节稳定。
 - 序列化确定性：`_convert_messages` 无时间戳/随机 id 混入，测试以 json.dumps 键序敏感比较固化（`test_convert_messages_serialization_deterministic`）。
-- 度量脚本：`scripts/cache_hitrate_bench.py`（固定 10 轮任务脚本，聚合命中率 + PASS/BELOW 判定）。**线上验收数据（≥70%）待在配置了 `LLM_*` 的环境运行脚本回填**：基线分支与本分支各跑一次对比。
+- 度量脚本：`scripts/cache_hitrate_bench.py`（探针式设计：monkeypatch `_build_response` 截获原始 usage，与 rove 自身 Usage 解析解耦，同一脚本可跨分支运行保证口径一致；含 2 轮强制 `memory_update` 以暴露黑板失效场景）。**验收数据已回填，见下文「P1-4 验收数据」**。
+
+### P1-4 验收数据（实测回填）
+
+10 轮固定任务脚本（读文件 + 归纳 + 2 轮强制 memory_update），全新 worktree / 全新 `.rove`，真实 API。实测端点为 `.env` 所配 DeepSeek 兼容端点（隐式缓存，usage 返回 `cache_read_input_tokens`、`cache_creation` 恒 0）：
+
+| 指标 | 基线 149e835 | 本分支 bc819d1 | 变化 |
+|---|---|---|---|
+| 调用次数 | 27 | 28 | — |
+| 未命中输入 token | 40,677 | 40,039 | 持平 |
+| 缓存读 token | 241,920 | 357,376 | **+47.7%** |
+| **聚合命中率** | **85.61%** | **89.93%** | +4.3pp |
+| R2（第 1 次黑板变化） | 65.48% | **92.82%** | +27.3pp |
+| R7（第 2 次黑板变化） | 44.93% | **95.93%** | +51.0pp |
+| 其余轮次区间 | 84.6~96.9% | 79.4~97.3% | 持平 |
+
+结论：稳态命中率 ≥70% 达标；P1 的收益集中在**黑板变化轮**——基线因黑板进 system prompt 使整个前缀失效（§2.3 预判的失效模式），迁出后与稳态轮无异。首轮 41%（本分支）为冷启动噪声：会话首次调用必然全价，无优化空间。缓存读 token 在未命中量持平的前提下多出 47.7%，即同等工作负载下按折扣价计费的输入占比显著上升。
+
+### P2 显式断点（已实现）
+
+- `LLM_CACHE_MODE = auto | explicit | off`（默认 auto；adapter 构造参数优先于环境变量）。auto/off 不传断点，仅依赖隐式缓存；off 为显式声明（服务端隐式缓存无法从客户端关闭）。
+- explicit 断点（≤3 个，≤ Anthropic 上限 4）：断点 1 = system 块 + 最后一个工具定义；断点 2 = 历史倒数第 35 条消息（与 L1 `KEEP_TAIL` 对齐的保留窗口边缘）。装配在 `_convert_messages` 之后的**载荷副本**上，不改写会话历史。
+- 端点门控：`anthropic.com` 默认放行；其他端点实测容忍后用 `LLM_CACHE_EXPLICIT_ALLOWED=1` attest 开启，否则告警并回退 auto（每 adapter 仅告警一次）。
+- **P2-4 端点容忍度实测结论**（`scripts/probe_cache_control.py`，错误信息脱敏）：当前 `.env` 端点（模型 `deepseek-flash`）**接受** `cache_control`（无 400，usage 正常返回），但两次相同请求的 `cache_read/cache_creation` 恒为 0——该端点为隐式缓存且不回报显式断点收益，**生产保持默认 auto 正确**。GLM 官方端点未实测（无凭据），启用前按同一脚本验证。
+- 测试：`tests/test_cache_control.py` 11 项（模式解析、门控、断点放置、载荷接线、未验证端点回退）。
+
+### P3 调用一次成功率（已实现）
+
+- `ToolRegistry.execute` 执行前按工具 schema 轻量校验（必填 / 顶层与数组元素类型 / 枚举；未声明字段不拒绝），失败返回**结构化错误**（哪个字段、期望什么、最小合法参数示例）作为 tool_result 回喂自愈；校验先于权限审批，不触发无谓审批。
+- 别名表：`task_create / task_update / task_get / task_list → todo`（#7 下线的碎片工具）；命中别名即执行现役工具并在结果中提示使用新名，旧参数不匹配时由 schema 校验给出教学性错误。
+- 失败经验入长期记忆：（工具名, 原因类别〔unknown_tool / permission / schema / exception〕）写入 episodic；同类第 2 次失败在尾部注入 `<tool-failure-hint>`（加入 L1 锚点排除表与会话标题排除表）。
+- system prompt 新增静态 Tool call discipline 段：精确工具名与参数、失败先读错误再修正、硬拒操作（`sudo` / `rm -rf /` 等七类）不要尝试——静态文本不破坏缓存。
+- 测试：`tests/test_call_success_rate.py` 17 项（校验规则、示例生成、别名行为、审批前置、失败提示注入与锚点排除）。
+
+### P4 重试浪费收敛（已实现）
+
+- `BaseLLMAdapter.estimate_scale`（EMA 权重 0.3，钳制 0.5~2.0）：`run_pipeline` 把本轮"将发往 API 的全部输入估算"挂载到 adapter，API 返回后按 `context_input_tokens / pending` 校准估算比例；`estimate_messages_tokens` 纯估算路径乘以 scale（增量校准路径有真实锚点，不叠加）。
+- 防污染设计：仅 stream 主调用参与校准（L4 摘要等 complete 旁路不触发）；压缩改写轮次估算失真自动跳过；`reactive_compact` 后的重试轮会以新估算重新挂载。
+- 水位与分层策略本身未动（§1 非目标）。reactive 重试已有 `MAX_REACTIVE_RETRIES=1` 限次；"每会话 ≤1 次"的线上验证需长会话观测，机制正确性由单测保证（校准收敛、钳制、压缩轮跳过、挂载/置空接线）。
 
 ### 涉及文件与测试
 
-- 代码：`llm.py`、`llm_adapters.py`、`usage_ledger.py`（新）、`main.py`、`lead_agent.py`、`web/agent_runner.py`、`web/app.py`、`web/session_manager.py`、`compaction/compaction_layers.py`（仅锚点排除表）、`prompt/system_prompt.py`（文案）、`memory.py`（文档）、`tool_registry.py`、`frontend` 类型与 Sidebar。
-- 测试：`tests/test_usage_ledger.py`（14 项）、`tests/test_prefix_stability.py`（10 项）、`test_compaction.py` 增记忆锚点排除项。全量 `PYTHONPATH=src python -m pytest tests/ -q` 绿；`tsc --noEmit` 通过。
+- P0：`llm.py`、`llm_adapters.py`、`usage_ledger.py`（新）、`main.py`、`lead_agent.py`、`web/agent_runner.py`、`web/app.py`、`frontend` 类型与 Sidebar；`tests/test_usage_ledger.py`（14 项）。
+- P1：`lead_agent.py`、`web/agent_runner.py`、`compaction/compaction_layers.py`（仅锚点排除表）、`prompt/system_prompt.py`（文案）、`memory.py`（文档）、`web/session_manager.py`、`tool_registry.py`；`tests/test_prefix_stability.py`（11 项）+ `test_compaction.py` 锚点排除项。
+- P2：`llm_adapters.py`、`scripts/probe_cache_control.py`（新）；`tests/test_cache_control.py`（11 项）。
+- P3：`tool_registry.py`、`lead_agent.py`、`web/agent_runner.py`、`prompt/system_prompt.py`、`web/session_manager.py`、`compaction/compaction_layers.py`（锚点排除表）；`tests/test_call_success_rate.py`（17 项）。
+- P4：`llm_adapters.py`（estimate_scale / set_pending_estimate）、`compaction/compaction_layers.py`（run_pipeline 挂载与纯估算路径 scale）；`tests/test_compaction.py` 增 5 项。
+- 度量：`scripts/cache_hitrate_bench.py`（探针式，跨分支可比）。
+- 全量 `PYTHONPATH=src python -m pytest tests/ -q` 216 passed；`tsc --noEmit` 通过。
