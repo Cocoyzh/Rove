@@ -44,7 +44,7 @@ def show_status(lead: LeadAgent, llm: BaseLLMAdapter) -> None:
     console.print(f"  消耗 In/Out     {llm.total_input_tokens:,} / {llm.total_output_tokens:,}")
 
 
-def show_stats(lead: LeadAgent, llm: BaseLLMAdapter, title: str = "Stats") -> None:
+def show_stats(lead: LeadAgent, title: str = "Stats") -> None:
     """缓存命中率与成本小结（context-optimize P0），/stats 与退出小结共用。"""
     s = LEDGER.summary()
     console.rule(f"[bold cyan]{title}[/bold cyan]", style="cyan")
@@ -106,7 +106,7 @@ def main() -> None:
             show_status(lead, llm)
             continue
         if query.strip() == "/stats":
-            show_stats(lead, llm)
+            show_stats(lead)
             continue
         if query.strip() == "/context":
             show_context(lead, llm)
@@ -131,7 +131,7 @@ def main() -> None:
             console.print("[dim](empty response)[/dim]")
 
     # 会话结束成本小结（context-optimize P0）
-    show_stats(lead, llm, title="会话结束小结")
+    show_stats(lead, title="会话结束小结")
 
 if __name__ == "__main__":
     main()

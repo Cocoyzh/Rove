@@ -20,15 +20,27 @@ def _store_l4_summary(summary: str) -> None:
     MEMORY.long_term.store("episodic", f"summary_{int(time.time())}", summary[:2000])
 
 
-def _build_system_prompt(query: str) -> str:
-    """System Prompt = 核心指令 + 记忆块（工作记忆 + 长期记忆检索）。
+def _build_system_prompt() -> str:
+    """System Prompt 逐字节稳定（P1 前缀稳定化）。
 
-    记忆走 system prompt 注入，天然位于压缩流水线之外，永不失忆。
+    动态记忆块（工作记忆黑板 + 长期记忆检索）不再拼进 system prompt——
+    黑板每回合变化会使整个请求前缀缓存全量失效——改为由 _inject_memory_turn
+    作为尾部合成 user 消息注入，旧副本留在历史中原样不动，前缀保持只增不改。
     """
-    memory_block = MEMORY.build_system_context(query)
-    if memory_block:
-        return f"{SYSTEM_PROMPT}\n\n{memory_block}"
     return SYSTEM_PROMPT
+
+
+def _inject_synthetic(messages: List[Message], content: str) -> None:
+    """尾部注入一条合成 user 消息（inbox / 后台结果 / 提醒 / 记忆块统一入口）。
+
+    合成消息内容以保留标签开头，L1 的 _is_user_anchor 据此排除出用户锚点。
+    """
+    if content:
+        messages.append(Message(role="user", content=content))
+
+
+# 记忆回合注入消息的识别前缀（与 L1 锚点排除表、会话标题提取共用同一组标签）
+MEMORY_TURN_PREFIXES = ("<working-memory>", "<long-term-memory>")
 
 
 class LeadAgent:
@@ -66,6 +78,22 @@ class LeadAgent:
     def _stream_text(text: str) -> None:
         console.print(text, end="", markup=False, highlight=False)
 
+    def _inject_memory_turn(self, query: str) -> None:
+        """黑板 + 长期记忆检索结果作为尾部合成 user 消息注入，每回合给到最新状态。
+
+        内容与历史中最后一条记忆消息完全一致时跳过（旧副本仍在历史里，
+        信息不丢失）；内容变化时追加新副本，旧副本随历史老化、交给压缩剪除。
+        """
+        content = MEMORY.build_system_context(query)
+        if not content:
+            return
+        for msg in reversed(self.messages):
+            if msg.role == "user" and msg.content and msg.content.startswith(MEMORY_TURN_PREFIXES):
+                if msg.content == content:
+                    return
+                break
+        _inject_synthetic(self.messages, content)
+
     def run(self, query: str) -> str:
         self.messages.append(Message(role="user", content=query))
 
@@ -80,22 +108,22 @@ class LeadAgent:
             for step in range(self.max_steps):
                 inbox = BUS.read_inbox('lead')
                 if inbox:
-                    self.messages.append(Message(role="user",
-                                                 content=f"<inbox>{json.dumps(inbox, indent=2)}</inbox>"))
+                    _inject_synthetic(self.messages, f"<inbox>{json.dumps(inbox, indent=2)}</inbox>")
                 notifs = bg_manager.drain_notifications()
                 if notifs:
                     notif_text = "\n".join(
                         f"[bg:{n['task_id']}] {n['status']}: {n['result']}" for n in notifs
                     )
-                    self.messages.append(Message(role="user",
-                                                 content=f"<background-results>\n{notif_text}\n</background-results>"))
+                    _inject_synthetic(self.messages,
+                                      f"<background-results>\n{notif_text}\n</background-results>")
 
                 run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
+                self._inject_memory_turn(query if step == 0 else "")
 
                 try:
                     request = LLMRequest(messages=self.messages, tools=self.tools,
                                          max_tokens=8000,
-                                         system_prompt=_build_system_prompt(query if step == 0 else ""))
+                                         system_prompt=_build_system_prompt())
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     if response.content:
                         console.print()
@@ -150,10 +178,10 @@ class LeadAgent:
                     if reminder_cooldown > 0:
                         reminder_cooldown -= 1
                     elif rounds_since_todo >= 4:
-                        self.messages.append(Message(
-                            role="user",
-                            content="<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>"
-                        ))
+                        _inject_synthetic(
+                            self.messages,
+                            "<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>",
+                        )
                         reminder_cooldown = 6
 
             return "Error: max_steps exceeded before the agent finished."

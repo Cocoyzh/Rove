@@ -243,6 +243,16 @@ def test_anchor_excludes_synthetic_system_messages():
     assert all("<inbox>" not in c for c in user_contents), "合成收件箱消息不应被钉为锚点"
 
 
+def test_anchor_excludes_memory_turn_messages():
+    """黑板/长期记忆的回合注入消息不享有用户锚点保护（P1 前缀稳定化）：
+    每回合都会重注最新副本，旧副本可随中段剪除。"""
+    from rove.compaction.compaction_layers import _is_user_anchor
+
+    for prefix in ("<working-memory>", "<long-term-memory>"):
+        assert _is_user_anchor(Message(role="user", content=f"{prefix}\nGoal: 保持专注")) is False
+        assert _is_user_anchor(Message(role="user", content=f"真实需求 {prefix}")) is True
+
+
 def test_l2_persists_oversized_old_results(tmp_path):
     """L2 对滑出保留窗口的超长输出应落盘持久化并保留路径指针，
     全文可回溯，且已持久化的消息不会被二度处理。"""

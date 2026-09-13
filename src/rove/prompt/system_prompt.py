@@ -33,7 +33,7 @@ Rules:
 - Stop once all tests pass and the task is complete.
 
 Memory:
-- A <working-memory> block and a <long-term-memory> block are injected into your system prompt each turn. They live OUTSIDE the conversation history and survive compaction — treat them as your source of truth.
+- A <working-memory> block and a <long-term-memory> block are injected as a synthetic user message near the end of the conversation each turn (the system prompt itself stays stable for prompt caching). Always trust the LATEST block and treat it as your source of truth; older copies are stale history.
 - Use memory_update to keep the blackboard current: set goal when the task is clear, append finding after each verified conclusion, mark file as you focus on it, and put unresolved questions in note (scratchpad).
 - Use memory_store to persist durable knowledge for future sessions: project conventions and test commands (semantic), root causes and fixes you verified (episodic), user preferences (preference).
 - Use memory_recall when you suspect a past session already explored this problem — it is cheaper than re-exploring.

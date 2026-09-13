@@ -2,7 +2,8 @@
 
 分层架构，本地文件自包含、零外部服务依赖（验收标准 #3）：
 - WorkingMemory  短期工作记忆黑板：当前目标 / 关键发现 / 聚焦文件 / 草稿，
-  每轮注入 System Prompt 作为结构化锚点（不入压缩流水线、永不失忆）；
+  每回合作为尾部合成 user 消息注入（system prompt 保持逐字节稳定以命中
+  前缀缓存，黑板副本在历史中原样保留，不参与锚点保护）；
 - LongTermMemory 长期记忆库：semantic / episodic / preference 三类条目，
   JSONL 持久化到 .rove/memory/，跨会话继承，轻量关键词重叠检索。
 """
@@ -69,7 +70,7 @@ class WorkingMemory:
             self.scratchpad = []
 
     def render(self) -> str:
-        """渲染为注入 System Prompt 的紧凑文本块；空记忆返回空串。"""
+        """渲染为每回合尾部注入的紧凑文本块；空记忆返回空串。"""
         if not (self.current_goal or self.findings or self.focused_files or self.scratchpad):
             return ""
         lines = ["<working-memory>"]
@@ -223,7 +224,11 @@ class MemoryManager:
         self.long_term = LongTermMemory(memory_dir)
 
     def build_system_context(self, query: str = "") -> str:
-        """拼装每轮注入 System Prompt 的记忆块（工作记忆 + 长期记忆检索）。"""
+        """拼装每回合注入的记忆块（工作记忆黑板 + 长期记忆检索）。
+
+        自 context-optimize P1 起不再进 system prompt，由 lead_agent
+        作为尾部合成 user 消息注入，保持请求前缀稳定可缓存。
+        """
         blocks = [b for b in (self.working.render(), self.long_term.render_context(query)) if b]
         return "\n".join(blocks)
 

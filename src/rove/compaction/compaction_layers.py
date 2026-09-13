@@ -219,9 +219,11 @@ def micro_compact(messages: list[Message], tool_results_dir: Path | None = None)
 
 # ---------------- L1 -------------------
 # 不参与锚点保护的前缀：压缩占位/摘要 + 系统注入的合成 user 消息
+# （<working-memory>/<long-term-memory> 为每回合重注的记忆块，旧副本可剪）
 ANCHOR_EXCLUDED_PREFIXES = (
     "[已压缩", "[对话已压缩]", "[应急压缩]",
     "<reminder>", "<inbox>", "<background-results>",
+    "<working-memory>", "<long-term-memory>",
 )
 
 

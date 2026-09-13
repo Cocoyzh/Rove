@@ -35,13 +35,14 @@ class ToolRegistry:
             self.register(tool)
 
     def get_schemas(self) -> List[Dict[str, Any]]:
+        # 按名称排序导出，保证请求前缀中工具定义逐字节稳定（前缀缓存友好）
         return [
             {
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.input_schema,
             }
-            for tool in self._tools.values()
+            for tool in sorted(self._tools.values(), key=lambda t: t.name)
         ]
 
     def execute(self, name: str, arguments: Dict[str, Any]) -> str:

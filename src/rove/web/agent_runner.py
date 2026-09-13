@@ -3,7 +3,12 @@ import time
 from typing import Callable, Optional, Dict, Any, List
 from rich.console import Console
 
-from rove.lead_agent import LeadAgent, _build_system_prompt, _store_l4_summary
+from rove.lead_agent import (
+    LeadAgent,
+    _build_system_prompt,
+    _inject_synthetic,
+    _store_l4_summary,
+)
 from rove.prompt.system_prompt import SYSTEM_PROMPT
 from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES
 from rove.tools.message_bus import BUS
@@ -61,26 +66,24 @@ class WebLeadAgent(LeadAgent):
             for step in range(self.max_steps):
                 inbox = BUS.read_inbox('lead')
                 if inbox:
-                    self.messages.append(
-                        Message(role="user", content=f"<inbox>{json.dumps(inbox, indent=2)}</inbox>")
-                    )
+                    _inject_synthetic(self.messages, f"<inbox>{json.dumps(inbox, indent=2)}</inbox>")
                 notifs = bg_manager.drain_notifications()
                 if notifs:
                     notif_text = "\n".join(
                         f"[bg:{n['task_id']}] {n['status']}: {n['result']}" for n in notifs
                     )
-                    self.messages.append(
-                        Message(role="user", content=f"<background-results>\n{notif_text}\n</background-results>")
-                    )
+                    _inject_synthetic(self.messages,
+                                      f"<background-results>\n{notif_text}\n</background-results>")
 
                 run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
+                self._inject_memory_turn(query if step == 0 else "")
 
                 try:
                     request = LLMRequest(
                         messages=self.messages,
                         tools=self.tools,
                         max_tokens=8000,
-                        system_prompt=_build_system_prompt(query if step == 0 else ""),
+                        system_prompt=_build_system_prompt(),
                     )
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     if response.content:
@@ -156,11 +159,9 @@ class WebLeadAgent(LeadAgent):
                     if reminder_cooldown > 0:
                         reminder_cooldown -= 1
                     elif rounds_since_todo >= 4:
-                        self.messages.append(
-                            Message(
-                                role="user",
-                                content="<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>",
-                            )
+                        _inject_synthetic(
+                            self.messages,
+                            "<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>",
                         )
                         reminder_cooldown = 6
 
