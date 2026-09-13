@@ -97,3 +97,45 @@ export interface SystemStatus {
   total_output_tokens?: number;
   call_count?: number;
 }
+
+// ==================== CallTrace 调用检查器 ====================
+
+export type CallEventKind = 'llm_call' | 'tool_exec';
+// running 仅存在于 WS 实时流（进行中），落盘/回放均为终态
+export type CallEventStatus = 'running' | 'ok' | 'error' | 'tool_use';
+export type CallBlockType = 'user_message' | 'thinking' | 'text' | 'tool_use' | 'tool_result';
+
+export interface CallBlock {
+  type: CallBlockType;
+  tool_name?: string | null;
+  tool_id?: string | null;
+  preview: string;
+  full_len?: number;
+  /** 形如 "{session_id}:{seq}:{block_index}"，指向该块全文所在位置（输入型 tool_result 指向原 tool_exec 事件） */
+  full_ref?: string | null;
+  is_error?: boolean | null;
+}
+
+export interface RequestComposition {
+  system_segments?: string[];
+  memory_block?: boolean;
+  message_count?: number;
+  tool_count?: number;
+}
+
+export interface CallEvent {
+  seq: number;
+  session_id: string;
+  agent_name: string;
+  kind: CallEventKind;
+  status: CallEventStatus;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number | null;
+  latency_ms: number;
+  started_at: number;
+  error?: string | null;
+  request_composition?: RequestComposition | null;
+  blocks: CallBlock[];
+}

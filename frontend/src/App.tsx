@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { CollabPanel } from './components/CollabPanel';
+import { CallInspector } from './components/CallInspector';
 import { ApprovalCard } from './components/ApprovalCard';
 import { useRoveWebSocket } from './hooks/useRoveWebSocket';
 import { SessionSummary, SystemStatus } from './types/rove';
@@ -12,6 +13,7 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isCollabOpen, setIsCollabOpen] = useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
 
   // 获取所有会话列表
   const fetchSessions = useCallback(async () => {
@@ -70,6 +72,7 @@ export default function App() {
     pendingApproval,
     isRunning,
     approvalMode,
+    callEvents,
     sendMessage,
     sendApproval,
     sendCompact,
@@ -187,6 +190,7 @@ export default function App() {
         pendingApproval={pendingApproval}
         isRunning={isRunning}
         approvalMode={approvalMode}
+        systemStatus={systemStatus}
         onChangeApprovalMode={changeApprovalMode}
         onSendMessage={handleSendMessage}
         onSendApproval={sendApproval}
@@ -194,12 +198,23 @@ export default function App() {
         onToggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
         isCollabOpen={isCollabOpen}
         onToggleCollab={() => setIsCollabOpen((prev) => !prev)}
+        isInspectorOpen={isInspectorOpen}
+        onToggleInspector={() => setIsInspectorOpen((prev) => !prev)}
         renderApprovalCard={(appr) => (
           <ApprovalCard approval={appr} onRespond={sendApproval} />
         )}
       />
 
-      {/* 3. 右侧栏：Task 看板与 Teammates 协同监控 (平滑渐变折叠) */}
+      {/* 3. 右侧抽屉一：调用检查器（调用粒度观测） */}
+      <CallInspector
+        isOpen={isInspectorOpen}
+        onClose={() => setIsInspectorOpen(false)}
+        sessionId={currentSessionId}
+        callEvents={callEvents}
+        isRunning={isRunning}
+      />
+
+      {/* 4. 右侧栏：Task 看板与 Teammates 协同监控 (平滑渐变折叠) */}
       <CollabPanel
         isOpen={isCollabOpen}
         onClose={() => setIsCollabOpen(false)}

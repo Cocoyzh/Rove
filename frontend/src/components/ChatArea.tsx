@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft, ShieldCheck } from 'lucide-react';
-import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode, APPROVAL_MODE_LABELS } from '../types/rove';
+import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft, ShieldCheck, ListTree } from 'lucide-react';
+import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode, APPROVAL_MODE_LABELS, SystemStatus } from '../types/rove';
 import { MessageItem } from './MessageItem';
 import { groupMessagesIntoTurns } from '../utils/turnGrouper';
 
@@ -14,6 +14,7 @@ interface ChatAreaProps {
   pendingApproval: ApprovalRequest | null;
   isRunning: boolean;
   approvalMode: ApprovalMode;
+  systemStatus: SystemStatus | null;
   onSendMessage: (query: string) => void;
   onSendApproval: (approvalId: string, decision: string) => void;
   onChangeApprovalMode: (mode: ApprovalMode) => void;
@@ -21,6 +22,8 @@ interface ChatAreaProps {
   onToggleSidebar: () => void;
   isCollabOpen: boolean;
   onToggleCollab: () => void;
+  isInspectorOpen: boolean;
+  onToggleInspector: () => void;
   renderApprovalCard?: (approval: ApprovalRequest) => React.ReactNode;
 }
 
@@ -34,6 +37,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   pendingApproval,
   isRunning,
   approvalMode,
+  systemStatus,
   onSendMessage,
   onSendApproval,
   onChangeApprovalMode,
@@ -41,6 +45,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onToggleSidebar,
   isCollabOpen,
   onToggleCollab,
+  isInspectorOpen,
+  onToggleInspector,
   renderApprovalCard,
 }) => {
   const [input, setInput] = useState('');
@@ -122,8 +128,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* 右侧：权限模式切换 + 协同面板切换 */}
+        {/* 右侧：上下文仪表 + 权限模式切换 + 面板切换 */}
         <div className="flex items-center space-x-2">
+          {/* Token 燃烧仪表：逼近压缩水位变色预警（L1 20% / L4 40%） */}
+          <ContextGauge systemStatus={systemStatus} />
+
           <div
             className="flex items-center space-x-1.5 border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-slate-600"
             title="权限审批模式：严格审查逐条审批；工作区信任自动放行区内写入；完全访问仅保留硬拒绝底线"
@@ -141,6 +150,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               ))}
             </select>
           </div>
+
+          <button
+            onClick={onToggleInspector}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center space-x-1.5 transition-all ${
+              isInspectorOpen
+                ? 'bg-sky-50 border-sky-200 text-sky-700 shadow-xs'
+                : 'border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-900'
+            }`}
+            title="切换调用检查器"
+          >
+            <ListTree size={14} />
+            <span className="hidden md:inline">调用检查器</span>
+          </button>
 
           <button
             onClick={onToggleCollab}
@@ -245,6 +267,52 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Token 燃烧仪表：实时显示当前会话上下文占用与剩余百分比。
+ * 压缩水位（compaction_layers.py）：L1 20% 触发主动压缩，L4 40% 触发应急压缩——
+ * 逼近水位时仪表变色预警，把"即将被压缩"这个不可见事件可视化。
+ */
+const L1_WATERMARK = 20;
+const L4_WATERMARK = 40;
+
+const formatCompactTokens = (n: number) =>
+  n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+
+const ContextGauge: React.FC<{ systemStatus: SystemStatus | null }> = ({ systemStatus }) => {
+  if (!systemStatus || !systemStatus.context_window) return null;
+  const pct = systemStatus.context_used_pct || 0;
+  const used = systemStatus.session_context_tokens || 0;
+  const color =
+    pct >= L4_WATERMARK
+      ? 'bg-rose-500'
+      : pct >= L1_WATERMARK
+      ? 'bg-amber-500'
+      : 'bg-emerald-500';
+  const textColor =
+    pct >= L4_WATERMARK
+      ? 'text-rose-600'
+      : pct >= L1_WATERMARK
+      ? 'text-amber-600'
+      : 'text-slate-500';
+
+  return (
+    <div
+      className="hidden lg:flex items-center space-x-1.5 border border-slate-200 rounded-lg px-2 py-1.5"
+      title={`上下文占用 ${used.toLocaleString('en-US')} / ${systemStatus.context_window.toLocaleString('en-US')} tokens（${pct}%）\n≥${L1_WATERMARK}% 主动压缩 · ≥${L4_WATERMARK}% 应急压缩`}
+    >
+      <span className={`text-[10px] font-mono font-medium ${textColor}`}>
+        {formatCompactTokens(used)} · {pct}%
+      </span>
+      <div className="w-14 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${color}`}
+          style={{ width: `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%` }}
+        />
       </div>
     </div>
   );

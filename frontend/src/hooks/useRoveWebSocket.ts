@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode } from '../types/rove';
+import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode, CallEvent } from '../types/rove';
 
 interface UseRoveWebSocketOptions {
   sessionId: string | null;
@@ -14,6 +14,8 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('workspace');
+  // 调用检查器数据：切换会话时从 /api/traces 回放历史，实时 call_event 按 seq upsert
+  const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pendingQueryRef = useRef<string | null>(null);
@@ -30,13 +32,41 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     setIsRunning(false);
   }, []);
 
+  // call_event 按 seq upsert（running 事件先占位，终态事件覆盖同 seq）
+  const upsertCallEvent = useCallback((event: CallEvent) => {
+    setCallEvents((prev) => {
+      const idx = prev.findIndex((e) => e.seq === event.seq);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = event;
+        return next;
+      }
+      return [...prev, event].sort((a, b) => a.seq - b.seq);
+    });
+  }, []);
+
+  // 从 trace 文件回放该会话的历史调用（重开页面 / 断线重连后补齐）
+  const fetchCallEvents = useCallback((sid: string) => {
+    fetch(`/api/traces/${encodeURIComponent(sid)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.events)) {
+          setCallEvents(data.events as CallEvent[]);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (!sessionId) {
       setIsConnected(false);
       setMessages([]);
+      setCallEvents([]);
       resetStreamingState();
       return;
     }
+
+    fetchCallEvents(sessionId);
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -56,6 +86,8 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
         if (isCleanedUp) return;
         setIsConnected(true);
         resetStreamingState();
+        // 重连可能错过事件，补拉一次 trace 回放
+        fetchCallEvents(sessionId);
 
         // 若有待发送的首次消息，在连接建立完成后立即发出
         if (pendingQueryRef.current) {
@@ -78,6 +110,17 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
             case 'token':
               setIsRunning(true);
               setCurrentStreamingText((prev) => prev + data.content);
+              break;
+
+            case 'call_event':
+              upsertCallEvent(data.event as CallEvent);
+              break;
+
+            case 'session_title':
+              // 旁路命名完成，立即刷新侧栏标题
+              if (onSessionUpdatedRef.current) {
+                onSessionUpdatedRef.current();
+              }
               break;
 
             case 'tool_start':
@@ -255,6 +298,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     pendingApproval,
     isRunning,
     approvalMode,
+    callEvents,
     sendMessage,
     sendApproval,
     sendCompact,
