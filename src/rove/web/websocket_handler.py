@@ -20,6 +20,7 @@ from rove.tools.tools_setup import (
     build_team_tools,
     FILE_TOOLS,
 )
+from rove.tools.subagent import SubagentManager, build_subagent_tool
 from rove.web.web_approval import WebApprovalManager
 from rove.web.agent_runner import WebLeadAgent
 from rove.web.session_manager import message_to_dict
@@ -56,6 +57,13 @@ class SessionConnection:
             self.permission_policy,
             self.approval_mgr.request,
         )
+        # 一次性子代理：进度/起止事件经 WebSocket 实时推给前端 TeamMonitor
+        self.subagent_manager = SubagentManager(
+            self.app_state.llm,
+            permission_policy=self.permission_policy,
+            approval_handler=self.approval_mgr.request,
+            on_event=self._on_subagent_event,
+        )
         self.registry.register_many([
             build_todo_tool(self.task_manager),
             execute_python_tool,
@@ -66,6 +74,7 @@ class SessionConnection:
             web_search_tool,
             run_bg_tool,
             check_bg_tool,
+            build_subagent_tool(self.subagent_manager),
         ])
 
         # 构建 WebLeadAgent 并挂载事件回调
@@ -149,6 +158,10 @@ class SessionConnection:
             "target_path": data.get("target_path", ""),
             "available_choices": data.get("available_choices", ["y", "s", "n"]),
         })
+
+    def _on_subagent_event(self, event: Dict[str, Any]) -> None:
+        """subagent 起止/每轮进度事件（自 subagent 工作线程调用，走线程安全发送队列）。"""
+        self._send_json_threadsafe(event)
 
     async def handle_chat(self, query: str) -> None:
         # 在独立线程中运行 agent.run，保证 WebSocket 异步接收事件不卡死

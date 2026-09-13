@@ -85,6 +85,17 @@ export interface TeamConfig {
   members: TeammateMember[];
 }
 
+// 一次性 SubAgent 运行态（后端 subagent_status WebSocket 事件）
+export interface SubagentRun {
+  task_id: string;
+  status: 'running' | 'completed' | 'error';
+  objective?: string;
+  turn?: number;
+  max_turns?: number;
+  activity?: string;
+  total_tokens?: number;
+}
+
 export interface SystemStatus {
   model: string;
   context_window: number;
