@@ -246,3 +246,124 @@ def test_concurrency_limit_blocks_second_dispatch(tmp_path):
     t.join(timeout=5)
     assert not t.is_alive()
     assert "usage: turns=1" in results["report"]
+
+
+# ---------- P1：后台化与进度心跳 ----------
+
+def make_p1_manager(llm, tmp_path):
+    """P1 专用：bg/记录均指向测试实例，不污染全局 bg_manager 与真实收件箱。"""
+    from rove.tools.background import BackGroundManager
+    from rove.tools.message_bus import MessageBus
+
+    return SubagentManager(
+        llm,
+        results_dir=tmp_path / "results",
+        bus=MessageBus(tmp_path / "inbox"),
+        bg=BackGroundManager(),
+        approval_handler=deny_all,
+    ), tmp_path
+
+
+def wait_until(predicate, timeout=5.0):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_background_dispatch_reports_via_bg_manager(tmp_path):
+    mgr, base = make_p1_manager(FakeLLM([final_response("后台结论", usage=(10, 10))]), tmp_path)
+
+    reply = mgr.dispatch(objective="后台任务", context="c", run_in_background=True)
+    assert reply.startswith("Background subagent sub-")
+    task_id = reply.split()[2]
+
+    assert wait_until(lambda: mgr._bg.tasks.get(task_id, {}).get("status") == "completed")
+
+    # 完成通知进入既有通知管道，lead 下一步 drain_notifications 即可读到全量报告
+    notifs = mgr._bg.drain_notifications()
+    assert len(notifs) == 1
+    assert notifs[0]["task_id"] == task_id
+    assert notifs[0]["status"] == "completed"
+    assert "后台结论" in notifs[0]["result"]
+    assert "usage: turns=1" in notifs[0]["result"]
+    assert "后台结论" in mgr._bg.check(task_id)
+
+
+def test_background_progress_visible_in_check_background(tmp_path):
+    release = threading.Event()
+
+    def behavior(i, req):
+        # 第 1 轮正常执行（产生进度心跳），第 2 轮挂起等待测试放行
+        if i == 1:
+            return tool_use_response("t1", "read_file", {"path": "pyproject.toml"})
+        release.wait(timeout=5)
+        return final_response("done")
+
+    mgr, base = make_p1_manager(FakeLLM(behavior=behavior), tmp_path)
+
+    reply = mgr.dispatch(objective="慢任务", context="c", run_in_background=True)
+    task_id = reply.split()[2]
+    assert wait_until(lambda: "progress:" in mgr._bg.check(task_id))
+    assert "turn 1/" in mgr._bg.check(task_id)
+
+    release.set()
+    assert wait_until(lambda: mgr._bg.tasks[task_id]["status"] == "completed")
+
+
+def test_progress_heartbeat_written_to_lead_inbox(tmp_path):
+    llm = FakeLLM([
+        tool_use_response("t1", "read_file", {"path": "pyproject.toml"}, usage=(10, 10)),
+        final_response("done", usage=(10, 10)),
+    ])
+    mgr, base = make_p1_manager(llm, tmp_path)
+
+    mgr.dispatch(objective="o", context="c")
+
+    inbox = mgr._bus.read_inbox("lead")
+    progress = [m for m in inbox if m["type"] == "progress"]
+    assert len(progress) == 1, "只有执行了工具的轮次写心跳"
+    assert progress[0]["from"].startswith("sub-")
+    assert "turn 1/12" in progress[0]["content"]
+    assert "read_file" in progress[0]["content"]
+
+
+def test_subagent_events_emitted_for_frontend(tmp_path):
+    llm = FakeLLM([
+        tool_use_response("t1", "read_file", {"path": "pyproject.toml"}, usage=(10, 10)),
+        final_response("done", usage=(30, 20)),
+    ])
+    mgr, base = make_p1_manager(llm, tmp_path)
+    events = []
+    mgr._on_event = events.append
+
+    mgr.dispatch(objective="探索任务", context="c")
+
+    kinds = [(e["type"], e["status"]) for e in events]
+    assert ("subagent_status", "running") in kinds
+    assert ("subagent_status", "completed") in kinds
+    start = events[0]
+    assert start["objective"] == "探索任务" and start["max_turns"] == 12
+    progress_events = [e for e in events if e.get("turn")]
+    assert progress_events and progress_events[0]["turn"] == 1
+    end = events[-1]
+    assert end["total_tokens"] == 70
+
+
+def test_message_bus_accepts_progress_type(tmp_path):
+    from rove.tools.message_bus import MessageBus
+
+    bus = MessageBus(tmp_path / "inbox")
+    bus.send("sub-abc", "lead", "turn 1/12: read_file(a.txt)", msg_type="progress")
+
+    inbox = bus.read_inbox("lead")
+    assert len(inbox) == 1
+    assert inbox[0]["type"] == "progress"
+    assert inbox[0]["from"] == "sub-abc"
+
+    import pytest
+    with pytest.raises(ValueError):
+        bus.send("a", "b", "c", msg_type="bogus")

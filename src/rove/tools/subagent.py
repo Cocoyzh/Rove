@@ -1,4 +1,4 @@
-"""dispatch_subagent：一次性子代理派发（Task 工具模式，plans/subagent-optimize.md P0）。
+"""dispatch_subagent：一次性子代理派发（Task 工具模式，plans/subagent-optimize.md P0/P1）。
 
 Lead 把有边界的子任务外包给一个独立上下文窗口里的 subagent：
 - 全新独立消息历史，只拿到 lead 显式传入的 objective/context 简报；
@@ -7,8 +7,8 @@ Lead 把有边界的子任务外包给一个独立上下文窗口里的 subagent
   memory 写工具（防越权）、web_search（防外呼）、dispatch_subagent 自身（防自递归）；
 - 只把浓缩后的结构化报告作为 tool_result 回传 lead，中间轮次全部隔离在子上下文里。
 
-P0 为同步阻塞语义（lead 一次只跑 1 个，并发上限常量先行预留）；
-后台化与进度心跳见 P1。
+P0：同步阻塞语义（并发上限常量预留）；P1：run_in_background 异步派发复用
+run_background/check_background 通知管道，每轮向 lead inbox 写轻量进度心跳。
 """
 
 import time
@@ -21,8 +21,10 @@ from rove.permissions import APPROVAL_MANAGER, PermissionPolicy
 from rove.llm import LLMRequest, LLMResponse
 from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
 from rove.messages import Message
+from rove.tools.background import BackGroundManager, bg_manager
 from rove.tools.execute_python import execute_python_tool
 from rove.tools.file_tools import FILE_TOOLS
+from rove.tools.message_bus import BUS, MessageBus
 from rove.tool_registry import Tool, ToolRegistry
 
 # P0 为同步阻塞语义，lead 一次只跑 1 个；并发上限常量先行预留，P1 后台化后同样生效
@@ -74,15 +76,22 @@ class SubagentManager:
         permission_policy: PermissionPolicy = None,
         approval_handler=None,
         results_dir: Path = TOOL_RESULTS_DIR,
+        bus: MessageBus = BUS,
+        bg: BackGroundManager = bg_manager,
+        on_event=None,
     ):
         self._llm = llm
         self._permission_policy = permission_policy
         self._approval_handler = approval_handler
         self._results_dir = results_dir
+        self._bus = bus
+        self._bg = bg
+        self._on_event = on_event
         self._adapters: dict[str, BaseLLMAdapter] = {}
         self._lock = threading.Lock()
         self._active = 0
         self._current_id: str | None = None
+        self._last_total_tokens = 0
 
     # ---------- 派发入口 ----------
 
@@ -93,6 +102,7 @@ class SubagentManager:
         max_turns: int = DEFAULT_MAX_TURNS,
         token_budget: int = DEFAULT_TOKEN_BUDGET,
         model: str | None = None,
+        run_in_background: bool = False,
     ) -> str:
         objective = (objective or "").strip()
         context = (context or "").strip()
@@ -106,16 +116,30 @@ class SubagentManager:
         with self._lock:
             if self._active >= MAX_CONCURRENT_SUBAGENTS:
                 return (f"Error: concurrent subagent limit reached ({MAX_CONCURRENT_SUBAGENTS}); "
-                        f"current: {self._current_id}")
+                        f"current: {self._current_id}. Use check_background to poll it.")
             task_id = f"sub-{uuid.uuid4().hex[:8]}"
             self._active += 1
             self._current_id = task_id
+
+        worker_args = (task_id, objective, context, int(max_turns), int(token_budget), model)
+
+        if run_in_background:
+            self._bg.register(task_id, f"dispatch_subagent: {objective[:70]}")
+            thread = threading.Thread(
+                target=self._run_task,
+                args=worker_args + (True, None, None),
+                daemon=True,
+                name=f"subagent-{task_id}",
+            )
+            thread.start()
+            return (f"Background subagent {task_id} started: {objective[:70]}. "
+                    f"Its report will arrive via background notification; use check_background to poll.")
 
         done = threading.Event()
         holder: dict[str, str] = {}
         thread = threading.Thread(
             target=self._run_task,
-            args=(task_id, objective, context, int(max_turns), int(token_budget), model, done, holder),
+            args=worker_args + (False, done, holder),
             daemon=True,
             name=f"subagent-{task_id}",
         )
@@ -126,18 +150,33 @@ class SubagentManager:
     # ---------- 执行体 ----------
 
     def _run_task(self, task_id, objective, context, max_turns, token_budget, model,
-                  done_event, holder):
+                  notify_bg, done_event, holder):
         try:
+            self._emit({
+                "type": "subagent_status", "task_id": task_id, "status": "running",
+                "objective": objective[:200], "max_turns": max_turns,
+            })
             report = self._execute(task_id, objective, context, max_turns, token_budget, model)
+            status = "completed"
         except Exception as e:  # 不允许静默死亡：异常也要变成报告回到 lead
             report = f"## 结论摘要\n（子代理异常终止）\n\n## 遇到的障碍\nError: {e}"
+            status = "error"
         finally:
             with self._lock:
                 self._active -= 1
                 if self._current_id == task_id:
                     self._current_id = None
-        holder["report"] = report
-        done_event.set()
+
+        if notify_bg:
+            self._bg.notify(task_id, status, report)
+
+        self._emit({
+            "type": "subagent_status", "task_id": task_id, "status": status,
+            "total_tokens": self._last_total_tokens,
+        })
+        if done_event is not None:
+            holder["report"] = report
+            done_event.set()
     def _execute(self, task_id, objective, context, max_turns, token_budget, model) -> str:
         llm = self._resolve_adapter(model)
         registry = build_restricted_registry(self._permission_policy, self._approval_handler)
@@ -168,6 +207,7 @@ class SubagentManager:
             if response.usage:
                 total_in += response.usage.input_tokens
                 total_out += response.usage.output_tokens
+            self._last_total_tokens = total_in + total_out
             messages.append(Message(role="assistant",
                                     content=response.content,
                                     tool_calls=response.tool_calls))
@@ -183,9 +223,13 @@ class SubagentManager:
                              f"({total_in + total_out}/{token_budget} tokens after turn {turn})")
                 break
 
+            activity = []
             for tc in response.tool_calls:
                 output = registry.execute(tc.tool_name, tc.tool_args or {})
                 messages.append(Message(role="tool", tool_call_id=tc.tool_id, content=str(output)))
+                preview = ", ".join(str(v) for v in (tc.tool_args or {}).values())[:80]
+                activity.append(f"{tc.tool_name}({preview})")
+            self._emit_progress(task_id, turn, max_turns, "; ".join(activity)[:120])
 
         if not final_text and not stop_note:
             stop_note = f"max_turns reached ({max_turns})"
@@ -233,7 +277,30 @@ class SubagentManager:
         path.write_text(report, encoding="utf-8")
         return path
 
-    # ---------- 辅助 ----------
+    # ---------- 进度与辅助 ----------
+
+    def _emit_progress(self, task_id: str, turn: int, max_turns: int, activity: str) -> None:
+        self._emit({
+            "type": "subagent_status", "task_id": task_id, "status": "running",
+            "turn": turn, "max_turns": max_turns, "activity": activity,
+        })
+        # 轻量进度心跳写 lead 收件箱，lead 下一步轮询时以 <inbox> 读到；
+        # check_background 亦可经 bg 记录读到（同步派发无 bg 记录，自动跳过）
+        try:
+            self._bus.send(task_id, "lead",
+                           f"[{task_id}] turn {turn}/{max_turns}: {activity}",
+                           msg_type="progress")
+        except Exception:
+            pass
+        self._bg.set_progress(task_id, f"turn {turn}/{max_turns}: {activity}")
+
+    def _emit(self, event: dict) -> None:
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(event)
+        except Exception:
+            pass
 
     @staticmethod
     def _briefing(objective: str, context: str, max_turns: int, token_budget: int) -> str:
@@ -299,6 +366,11 @@ def build_subagent_tool(manager: SubagentManager) -> Tool:
                     "type": "string",
                     "description": "Optional model id override (e.g. a cheaper model for exploration).",
                 },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Run asynchronously and return immediately; the report arrives as a "
+                                   "background notification (default false: block until the report is ready).",
+                },
             },
             "required": ["objective", "context"],
         },
@@ -308,5 +380,6 @@ def build_subagent_tool(manager: SubagentManager) -> Tool:
             max_turns=kw.get("max_turns", DEFAULT_MAX_TURNS),
             token_budget=kw.get("token_budget", DEFAULT_TOKEN_BUDGET),
             model=kw.get("model"),
+            run_in_background=kw.get("run_in_background", False),
         ),
     )
