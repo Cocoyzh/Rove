@@ -2,6 +2,7 @@ import json
 import time
 from pathlib import Path
 import threading
+from typing import Optional
 from ..tool_registry import ToolRegistry, Tool
 from ..tools.file_tools import FILE_TOOLS
 from ..tools.protocol import build_protocol_tools
@@ -11,9 +12,11 @@ from rove.paths import WORKSPACE_ROOT
 from rove.llm_adapters import BaseLLMAdapter
 from rove.llm import LLMResponse, LLMRequest
 from rove.messages import Message
+from rove.call_trace import CallTracer, new_session_id
 
 class TeammateManger:
-    def __init__(self, team_dir: Path, task_manager=None, llm: BaseLLMAdapter = None):
+    def __init__(self, team_dir: Path, task_manager=None, llm: BaseLLMAdapter = None,
+                 tracer: Optional[CallTracer] = None):
         self.dir = team_dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.dir / "config.json"
@@ -22,6 +25,13 @@ class TeammateManger:
         self._task_manager = task_manager
         self._tool_registries: dict[str, ToolRegistry] = {}
         self._llm = llm
+        # 调用级追踪：Web 会话注入与 lead 共享的 tracer；REPL 自建独立会话文件
+        self._tracer = tracer if tracer is not None else CallTracer(new_session_id("repl"))
+
+    @property
+    def tracer(self) -> CallTracer:
+        """会话级 CallTracer，供运行时把 lead 视图挂到同一 trace 文件。"""
+        return self._tracer
 
     def _load_config(self) -> dict:
         if self.config_path.exists():
@@ -81,6 +91,7 @@ class TeammateManger:
 
     def _teammate_loop(self, name: str, role: str, prompt: str):
         team_name = self.config["team_name"]
+        agent_tracer = self._tracer.for_agent(name)
         sys_prompt = (
             f"You are '{name}', role: {role}, team: {team_name}. "
             f"You are an autonomous teammate. The lead creates tasks on a shared board and you find and complete them yourself.\n\n"
@@ -99,6 +110,7 @@ class TeammateManger:
             f"- Read your inbox regularly — the lead may send you messages or protocol requests."
         )
         messages: list[Message] = [Message(role="user", content=prompt)]
+        first_llm_call = True
 
         POLL_INTERVAL = 5
         IDLE_TIMEOUT = 60
@@ -114,11 +126,16 @@ class TeammateManger:
                 for msg in inbox:
                     messages.append(Message(role="user", content=json.dumps(msg)))
 
+                seq = None
                 try:
                     request = LLMRequest(messages=messages, tools=tools,
                                          max_tokens=8000, system_prompt=sys_prompt)
+                    seq = agent_tracer.llm_start(query=prompt if first_llm_call else None)
+                    first_llm_call = False
                     response: LLMResponse = self._llm.complete(request)
-                except Exception:
+                    agent_tracer.llm_end(seq, response)
+                except Exception as e:
+                    agent_tracer.llm_error(seq, str(e))
                     self._set_status(name, "idle")
                     return
 
@@ -130,12 +147,19 @@ class TeammateManger:
                     break
 
                 for tc in response.tool_calls:
+                    tseq = agent_tracer.tool_start(tc.tool_id, tc.tool_name, tc.tool_args)
+                    start_t = time.time()
                     try:
                         output = self._exec(name, tc.tool_name, tc.tool_args)
                         if tc.tool_name == "idle":
                             idle_requested = True
+                        is_error = False
                     except Exception as e:
                         output = f"Tool error: {e}"
+                        is_error = True
+                    cost_ms = int((time.time() - start_t) * 1000)
+                    agent_tracer.tool_end(tseq, tc.tool_id, tc.tool_name,
+                                          str(output), is_error, cost_ms)
 
                     messages.append(Message(role="tool",
                                             tool_call_id=tc.tool_id,

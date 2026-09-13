@@ -12,6 +12,7 @@ from rove.task_manager import TaskManager
 from rove.skill_loader import SkillLoader
 from rove.tools.agent_teams import TeammateManger
 from rove.llm_adapters import AnthropicLLMAdapter
+from rove.call_trace import load_trace_events, load_block_full
 from rove.web.session_manager import SessionManager
 from rove.web.websocket_handler import websocket_endpoint
 from fastapi import WebSocket
@@ -157,6 +158,25 @@ def create_app() -> FastAPI:
             "total_input_tokens": llm.total_input_tokens,
             "total_output_tokens": llm.total_output_tokens,
             "call_count": llm.call_count,
+        }
+
+    # ==================== 调用追踪回放（CallTrace） ====================
+
+    @app.get("/api/traces/{session_id}")
+    def get_trace(session_id: str):
+        """会话全部调用事件（预览形态）。大内容按 (seq, block_index) 单独拉取。"""
+        return {"session_id": session_id, "events": load_trace_events(session_id)}
+
+    @app.get("/api/traces/{session_id}/blocks/{seq}/{block_index}")
+    def get_trace_block(session_id: str, seq: int, block_index: int):
+        full = load_block_full(session_id, seq, block_index)
+        if full is None:
+            raise HTTPException(status_code=404, detail="Trace block not found")
+        return {
+            "session_id": session_id,
+            "seq": seq,
+            "block_index": block_index,
+            "full": full,
         }
 
     # ==================== WebSocket 双向实时流 ====================

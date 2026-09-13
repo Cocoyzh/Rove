@@ -9,6 +9,7 @@ from rove.task_manager import TaskManager
 from rove.tools.agent_teams import TeammateManger
 from rove.permissions import PermissionPolicy, VALID_APPROVAL_MODES
 from rove.tool_registry import ToolRegistry
+from rove.call_trace import CallTracer
 from rove.tools.todo import build_todo_tool
 from rove.tools.memory_tools import build_memory_tools
 from rove.tools.web_search import web_search_tool
@@ -43,11 +44,16 @@ class SessionConnection:
         self.approval_mgr = WebApprovalManager(on_approval_needed=self._on_approval_needed)
 
         # 构建专属于此会话的 TaskManager 与 TeamManager（实现会话级任务看板与协同隔离）
+        # 会话级调用追踪器：lead 与 teammates 共享，trace 落盘 .rove/traces/<session_id>.jsonl，
+        # 事件以 call_event 预览形态实时推送前端（大内容仅 preview + full_ref，按需拉全量）
+        self.tracer = CallTracer(session_id, on_event=self._on_call_event)
+
         self.task_manager = TaskManager(TASK_DIR / self.session_id)
         self.team_manager = TeammateManger(
             TEAM_DIR / self.session_id,
             self.task_manager,
             self.app_state.llm,
+            tracer=self.tracer,
         )
 
         # 构建专属于此 Web 会话的 ToolRegistry（权限策略会话级隔离，支持实时切换模式）
@@ -76,6 +82,7 @@ class SessionConnection:
             on_text=self._on_token,
             on_tool_start=self._on_tool_start,
             on_tool_end=self._on_tool_end,
+            tracer=self.tracer.for_agent("lead"),
         )
 
         # 从 session_manager 恢复该会话的历史消息与指标统计
@@ -136,6 +143,13 @@ class SessionConnection:
             "output": output,
             "is_error": is_error,
             "cost_ms": cost_ms,
+        })
+
+    def _on_call_event(self, event: Dict[str, Any]) -> None:
+        """调用级事件（已剥离 full 全文的预览形态）实时推送前端。"""
+        self._send_json_threadsafe({
+            "type": "call_event",
+            "event": event,
         })
 
     def _on_approval_needed(self, data: Dict[str, Any]) -> None:

@@ -1,6 +1,6 @@
 import json
 import time
-from typing import List
+from typing import List, Optional
 from rich.console import Console
 from rove.tool_registry import ToolRegistry
 from rove.prompt.system_prompt import SYSTEM_PROMPT
@@ -11,6 +11,7 @@ from rove.tools.background import bg_manager
 from rove.llm import LLMResponse, LLMRequest
 from rove.llm_adapters import BaseLLMAdapter
 from rove.messages import Message
+from rove.call_trace import AgentTracer, CallTracer, new_session_id
 
 console = Console()
 
@@ -32,7 +33,8 @@ def _build_system_prompt(query: str) -> str:
 
 
 class LeadAgent:
-    def __init__(self, llm: BaseLLMAdapter, registry: ToolRegistry, max_steps: int = 50):
+    def __init__(self, llm: BaseLLMAdapter, registry: ToolRegistry, max_steps: int = 50,
+                 tracer: Optional[AgentTracer] = None):
         self.llm = llm
         self.registry = registry
         self.max_steps = max_steps
@@ -40,6 +42,14 @@ class LeadAgent:
         self.tools = registry.get_schemas()
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
+        # 调用级追踪：Web 运行时注入共享 tracer（与 teammate 同会话落盘）；
+        # REPL 自建独立会话，trace 同样落盘（.rove/traces/），只是没有前端展示
+        if tracer is not None:
+            self.tracer = tracer
+            self._owns_tracer = False
+        else:
+            self.tracer = CallTracer(new_session_id()).for_agent("lead")
+            self._owns_tracer = True
 
     def reset(self) -> None:
         """清空对话历史，开始新会话。工作记忆快照归档进长期记忆（轻量反思）。"""
@@ -47,6 +57,9 @@ class LeadAgent:
         self.messages = []
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
+        if self._owns_tracer:
+            # /new 即新会话：trace 按会话一文件，重开新文件
+            self.tracer = CallTracer(new_session_id()).for_agent("lead")
 
     @property
     def conv_input_tokens(self) -> int:
@@ -92,10 +105,13 @@ class LeadAgent:
                 run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
 
                 try:
+                    seq = None
                     request = LLMRequest(messages=self.messages, tools=self.tools,
                                          max_tokens=8000,
                                          system_prompt=_build_system_prompt(query if step == 0 else ""))
+                    seq = self.tracer.llm_start(query=query if step == 0 else None)
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
+                    self.tracer.llm_end(seq, response)
                     if response.content:
                         console.print()
                     if response.usage:
@@ -103,6 +119,7 @@ class LeadAgent:
                         total_output_tokens += response.usage.output_tokens
                     reactive_retries = 0
                 except Exception as e:
+                    self.tracer.llm_error(seq, str(e))
                     if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) \
                             and reactive_retries < MAX_REACTIVE_RETRIES:
                         console.print("[bold yellow]⚠ 上下文溢出，触发应急压缩[/bold yellow]")
@@ -123,13 +140,19 @@ class LeadAgent:
                 for tool in response.tool_calls:
                     console.print(f"[bold yellow]▸ {tool.tool_name}[/bold yellow] [dim cyan]{tool.tool_args}[/dim cyan]")
 
+                    tseq = self.tracer.tool_start(tool.tool_id, tool.tool_name, tool.tool_args)
+                    start_t = time.time()
                     output = self.registry.execute(tool.tool_name, tool.tool_args)
+                    cost_ms = int((time.time() - start_t) * 1000)
 
-                    is_error = str(output).strip().lower().startswith(("error", "exception", "traceback"))
+                    output_str = str(output)
+                    is_error = output_str.strip().lower().startswith(("error", "exception", "traceback"))
+                    self.tracer.tool_end(tseq, tool.tool_id, tool.tool_name, output_str, is_error, cost_ms)
+
                     label = "error" if is_error else "output"
                     color = "red" if is_error else "green"
-                    preview = str(output)[:500]
-                    if len(str(output)) > 500:
+                    preview = output_str[:500]
+                    if len(output_str) > 500:
                         preview += " ..."
                     console.print(f"[{color}]  {label}:[/{color}] {preview}")
 

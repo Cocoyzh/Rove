@@ -122,11 +122,16 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
     @staticmethod
     def _build_response(message, latency_ms: int = 0) -> LLMResponse:
         contents = []
+        thinkings = []
         tool_calls: list[ToolCall] = []
 
         for block in message.content:
             if block.type == "text":
                 contents.append(block.text)
+            elif block.type == "thinking":
+                thinking_text = getattr(block, "thinking", "")
+                if thinking_text:
+                    thinkings.append(thinking_text)
             elif block.type == "tool_use":
                 tool_id = block.id
                 tool_name = block.name
@@ -148,14 +153,16 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
             raw_input = getattr(message.usage, "input_tokens", 0) or 0
             total_input = raw_input + cache_read + cache_creation
             usage = Usage(input_tokens=total_input,
-                          output_tokens=getattr(message.usage, "output_tokens", 0) or 0)
+                          output_tokens=getattr(message.usage, "output_tokens", 0) or 0,
+                          cache_read_tokens=cache_read)
         return LLMResponse(
             content=text,
             tool_calls=tool_calls,
             model=message.model,
             stop_reason=str(message.stop_reason),
             latency_ms=latency_ms,
-            usage=usage
+            usage=usage,
+            thinking="\n\n".join(thinkings),
         )
 
 

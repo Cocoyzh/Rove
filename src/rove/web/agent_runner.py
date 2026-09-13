@@ -12,6 +12,7 @@ from rove.llm import LLMResponse, LLMRequest
 from rove.llm_adapters import BaseLLMAdapter
 from rove.messages import Message
 from rove.tool_registry import ToolRegistry
+from rove.call_trace import AgentTracer
 
 console = Console()
 
@@ -23,6 +24,7 @@ class WebLeadAgent(LeadAgent):
     - on_text: token 流式输出
     - on_tool_start: 工具调用开始
     - on_tool_end: 工具调用结束
+    - tracer: 调用级追踪视图（call_event 通道 + trace 落盘），由 SessionConnection 注入
     """
 
     def __init__(
@@ -33,8 +35,9 @@ class WebLeadAgent(LeadAgent):
         on_text: Optional[Callable[[str], None]] = None,
         on_tool_start: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
         on_tool_end: Optional[Callable[[str, str, str, bool, int], None]] = None,
+        tracer: Optional[AgentTracer] = None,
     ) -> None:
-        super().__init__(llm, registry, max_steps)
+        super().__init__(llm, registry, max_steps, tracer=tracer)
         self.on_text_hook = on_text
         self.on_tool_start_hook = on_tool_start
         self.on_tool_end_hook = on_tool_end
@@ -75,13 +78,16 @@ class WebLeadAgent(LeadAgent):
                 run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
 
                 try:
+                    seq = None
                     request = LLMRequest(
                         messages=self.messages,
                         tools=self.tools,
                         max_tokens=8000,
                         system_prompt=_build_system_prompt(query if step == 0 else ""),
                     )
+                    seq = self.tracer.llm_start(query=query if step == 0 else None)
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
+                    self.tracer.llm_end(seq, response)
                     if response.content:
                         console.print()
                     if response.usage:
@@ -92,6 +98,7 @@ class WebLeadAgent(LeadAgent):
                         self.last_context_tokens = response.usage.input_tokens
                     reactive_retries = 0
                 except Exception as e:
+                    self.tracer.llm_error(seq, str(e))
                     if (
                         ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower())
                         and reactive_retries < MAX_REACTIVE_RETRIES
@@ -122,12 +129,14 @@ class WebLeadAgent(LeadAgent):
                     if self.on_tool_start_hook:
                         self.on_tool_start_hook(tool.tool_id, tool.tool_name, tool.tool_args)
 
+                    tseq = self.tracer.tool_start(tool.tool_id, tool.tool_name, tool.tool_args)
                     start_t = time.time()
                     output = self.registry.execute(tool.tool_name, tool.tool_args)
                     cost_ms = int((time.time() - start_t) * 1000)
 
                     output_str = str(output)
                     is_error = output_str.strip().lower().startswith(("error", "exception", "traceback"))
+                    self.tracer.tool_end(tseq, tool.tool_id, tool.tool_name, output_str, is_error, cost_ms)
 
                     label = "error" if is_error else "output"
                     color = "red" if is_error else "green"
