@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from typing import Dict, Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 from rich.console import Console
@@ -64,6 +65,7 @@ class SessionConnection:
             permission_policy=self.permission_policy,
             approval_handler=self.approval_mgr.request,
             on_event=self._on_subagent_event,
+            fast_model_id=os.getenv("LLM_FAST_MODEL_ID"),
         )
         self.registry.register_many([
             build_todo_tool(self.task_manager),

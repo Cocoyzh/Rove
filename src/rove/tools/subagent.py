@@ -19,7 +19,7 @@ from pathlib import Path
 from rove.paths import TOOL_RESULTS_DIR, WORKSPACE_ROOT
 from rove.permissions import APPROVAL_MANAGER, PermissionPolicy
 from rove.llm import LLMRequest, LLMResponse
-from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
+from rove.llm_adapters import ADAPTER_FACTORY, BaseLLMAdapter, estimate_cost_usd
 from rove.messages import Message
 from rove.tools.background import BackGroundManager, bg_manager
 from rove.tools.execute_python import execute_python_tool
@@ -79,6 +79,8 @@ class SubagentManager:
         bus: MessageBus = BUS,
         bg: BackGroundManager = bg_manager,
         on_event=None,
+        fast_model_id: str | None = None,
+        adapter_factory=None,
     ):
         self._llm = llm
         self._permission_policy = permission_policy
@@ -87,7 +89,8 @@ class SubagentManager:
         self._bus = bus
         self._bg = bg
         self._on_event = on_event
-        self._adapters: dict[str, BaseLLMAdapter] = {}
+        self._fast_model_id = fast_model_id
+        self._factory = adapter_factory if adapter_factory is not None else ADAPTER_FACTORY
         self._lock = threading.Lock()
         self._active = 0
         self._current_id: str | None = None
@@ -235,12 +238,12 @@ class SubagentManager:
             stop_note = f"max_turns reached ({max_turns})"
 
         return self._assemble_report(task_id, final_text, last_text, stop_note,
-                                     turns_used, total_in, total_out, started)
+                                     turns_used, total_in, total_out, started, llm.model)
 
     # ---------- 报告组装 ----------
 
     def _assemble_report(self, task_id, final_text, last_text, stop_note,
-                         turns_used, total_in, total_out, started) -> str:
+                         turns_used, total_in, total_out, started, model_id) -> str:
         duration = max(int(time.time() - started), 0)
         if final_text:
             body = final_text.strip()
@@ -253,11 +256,12 @@ class SubagentManager:
                 f"{stop_note}"
             )
 
+        cost_usd = estimate_cost_usd(model_id, total_in, total_out)
         report = (
             f"{body}\n\n---\n"
             f"usage: turns={turns_used}, input_tokens={total_in}, "
             f"output_tokens={total_out}, total_tokens={total_in + total_out}, "
-            f"duration={duration}s"
+            f"duration={duration}s, cost_usd={cost_usd:.6f}"
         )
         if stop_note:
             report += f"\nstopped: {stop_note}"
@@ -313,19 +317,20 @@ class SubagentManager:
         )
 
     def _resolve_adapter(self, model: str | None) -> BaseLLMAdapter:
-        """model 覆盖：按 model id 缓存独立适配器（P3 会把该缓存上移到适配器工厂）。"""
-        if not model or (self._llm and model == self._llm.model):
-            return self._llm
-        adapter = self._adapters.get(model)
-        if adapter is None:
-            adapter = AnthropicLLMAdapter(
-                model=model,
-                api_key=self._llm.api_key,
-                base_url=self._llm.base_url,
-                timeout=self._llm.timeout,
-            )
-            self._adapters[model] = adapter
-        return adapter
+        """模型路由（P3）：显式 model > fast 缺省 > 主模型。
+
+        - model="fast" → LLM_FAST_MODEL_ID；未配置时回落主适配器（与现状一致）；
+        - model=具体 id → 适配器工厂按 id 缓存获取；
+        - 未指定 → 配置了 LLM_FAST_MODEL_ID 时探索类子代理默认走 fast，
+          否则用主适配器（LLM_FAST_MODEL_ID 未配置时行为完全不变）。
+        """
+        if model == "fast":
+            return self._factory.get(self._fast_model_id) if self._fast_model_id else self._llm
+        if model:
+            return self._factory.get(model)
+        if self._fast_model_id:
+            return self._factory.get(self._fast_model_id)
+        return self._llm
 
 
 def build_subagent_tool(manager: SubagentManager) -> Tool:
@@ -364,7 +369,8 @@ def build_subagent_tool(manager: SubagentManager) -> Tool:
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional model id override (e.g. a cheaper model for exploration).",
+                    "description": "Optional model id override, or \"fast\" for the cheap model "
+                                   "configured via LLM_FAST_MODEL_ID (exploration tasks default to it).",
                 },
                 "run_in_background": {
                     "type": "boolean",

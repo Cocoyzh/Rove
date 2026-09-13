@@ -1,3 +1,5 @@
+import os
+
 from rove.tool_registry import ToolRegistry
 from rove.skill_loader import SkillLoader
 from rove.tools.todo import build_todo_tool, todo_tool
@@ -40,6 +42,7 @@ def build_default_registry(
         build_subagent_tool(SubagentManager(
             team_manager.llm,
             permission_policy=registry.permission_policy,
+            fast_model_id=os.getenv("LLM_FAST_MODEL_ID"),
         )),
     ])
 
