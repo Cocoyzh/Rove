@@ -1,7 +1,7 @@
 """
 Lead Agent
 """
-from ..tools.agent_teams import TeammateManger
+from ..tools.agent_teams import TeammateManager
 from ..tool_registry import Tool
 import json
 from ..tools.protocol import build_protocol_tools
@@ -12,7 +12,7 @@ VALID_MSG_TYPES = {
     "broadcast",
 }
 
-def build_team_tools(manager: TeammateManger):
+def build_team_tools(manager: TeammateManager):
     return [
         Tool(
             name="spawn_teammate",

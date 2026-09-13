@@ -6,7 +6,7 @@ from rich.console import Console
 
 from rove.paths import WORKSPACE_ROOT, TASK_DIR, TEAM_DIR
 from rove.task_manager import TaskManager
-from rove.tools.agent_teams import TeammateManger
+from rove.tools.agent_teams import TeammateManager
 from rove.permissions import PermissionPolicy, VALID_APPROVAL_MODES
 from rove.tool_registry import ToolRegistry
 from rove.tools.todo import build_todo_tool
@@ -44,7 +44,7 @@ class SessionConnection:
 
         # 构建专属于此会话的 TaskManager 与 TeamManager（实现会话级任务看板与协同隔离）
         self.task_manager = TaskManager(TASK_DIR / self.session_id)
-        self.team_manager = TeammateManger(
+        self.team_manager = TeammateManager(
             TEAM_DIR / self.session_id,
             self.task_manager,
             self.app_state.llm,

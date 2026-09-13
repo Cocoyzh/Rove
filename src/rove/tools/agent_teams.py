@@ -12,7 +12,7 @@ from rove.llm_adapters import BaseLLMAdapter
 from rove.llm import LLMResponse, LLMRequest
 from rove.messages import Message
 
-class TeammateManger:
+class TeammateManager:
     def __init__(self, team_dir: Path, task_manager=None, llm: BaseLLMAdapter = None):
         self.dir = team_dir
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -22,6 +22,11 @@ class TeammateManger:
         self._task_manager = task_manager
         self._tool_registries: dict[str, ToolRegistry] = {}
         self._llm = llm
+
+    @property
+    def llm(self) -> BaseLLMAdapter:
+        """本团队绑定的主模型适配器（dispatch_subagent 派发时复用）。"""
+        return self._llm
 
     def _load_config(self) -> dict:
         if self.config_path.exists():

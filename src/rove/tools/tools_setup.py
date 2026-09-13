@@ -8,7 +8,7 @@ from rove.tools.memory_tools import build_memory_tools
 from rove.tools.web_search import web_search_tool
 from rove.task_manager import TaskManager
 from rove.tools.team_tool import build_team_tools
-from rove.tools.agent_teams import TeammateManger
+from rove.tools.agent_teams import TeammateManager
 from rove.tools.file_tools import FILE_TOOLS
 from rove.permissions import APPROVAL_MANAGER, PermissionPolicy
 from rove.paths import WORKSPACE_ROOT
@@ -16,7 +16,7 @@ from rove.paths import WORKSPACE_ROOT
 def build_default_registry(
     skill_loader: SkillLoader,
     task_manager: TaskManager,
-    team_manager: TeammateManger
+    team_manager: TeammateManager
 ) -> ToolRegistry:
     registry = ToolRegistry(
         PermissionPolicy(WORKSPACE_ROOT),
