@@ -57,7 +57,8 @@ class SessionConnection:
             self.permission_policy,
             self.approval_mgr.request,
         )
-        # 一次性子代理：进度/起止事件经 WebSocket 实时推给前端 TeamMonitor
+        # 一次性子代理：进度/起止事件经 WebSocket 实时推给前端 TeamMonitor；
+        # 配置 LLM_FAST_MODEL_ID 时探索类子代理默认路由到廉价模型（P3）
         self.subagent_manager = SubagentManager(
             self.app_state.llm,
             permission_policy=self.permission_policy,
@@ -68,7 +69,7 @@ class SessionConnection:
             build_todo_tool(self.task_manager),
             execute_python_tool,
             *FILE_TOOLS,
-            *build_team_tools(self.team_manager),
+            *build_team_tools(self.team_manager, self.task_manager),
             build_skill_tool(self.app_state.skill_loader),
             *build_memory_tools(),
             web_search_tool,

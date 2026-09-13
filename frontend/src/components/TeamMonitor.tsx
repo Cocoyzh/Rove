@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Bot, RefreshCw, Moon, PowerOff, Zap } from 'lucide-react';
+import { Users, Bot, RefreshCw, Moon, PowerOff, Zap, AlertTriangle } from 'lucide-react';
 import { TeamConfig, SubagentRun } from '../types/rove';
 
 interface TeamMonitorProps {
@@ -108,6 +108,7 @@ export const TeamMonitor: React.FC<TeamMonitorProps> = ({ team, subagents, onRef
           members.map((member) => {
             const isWorking = member.status === 'working';
             const isIdle = member.status === 'idle';
+            const isCrashed = member.status === 'crashed';
 
             return (
               <div
@@ -136,6 +137,11 @@ export const TeamMonitor: React.FC<TeamMonitorProps> = ({ team, subagents, onRef
                     <span className="flex items-center space-x-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[10px] text-amber-700 font-medium">
                       <Moon size={10} />
                       <span>待机空闲</span>
+                    </span>
+                  ) : isCrashed ? (
+                    <span className="flex items-center space-x-1 px-2 py-0.5 rounded-full bg-red-50 border border-red-200 text-[10px] text-red-700 font-medium">
+                      <AlertTriangle size={10} />
+                      <span>已崩溃</span>
                     </span>
                   ) : (
                     <span className="flex items-center space-x-1 px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] text-slate-500 font-medium">

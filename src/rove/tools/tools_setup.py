@@ -28,14 +28,15 @@ def build_default_registry(
         build_todo_tool(task_manager),
         execute_python_tool,
         *FILE_TOOLS,
-        *build_team_tools(team_manager),
+        *build_team_tools(team_manager, task_manager),
         build_skill_tool(skill_loader),
         *build_memory_tools(),
         web_search_tool,
         run_bg_tool,
         check_bg_tool,
         # 一次性子代理：权限策略复用 lead 实例（模式切换同步生效），
-        # 不入 _ALLOWED_TOOLS / _ASK_TOOLS，默认走 ASK 兜底审批
+        # 不入 _ALLOWED_TOOLS / _ASK_TOOLS，默认走 ASK 兜底审批；
+        # 配置 LLM_FAST_MODEL_ID 时探索类子代理默认路由到廉价模型（P3）
         build_subagent_tool(SubagentManager(
             team_manager.llm,
             permission_policy=registry.permission_policy,

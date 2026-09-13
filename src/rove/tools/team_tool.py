@@ -12,8 +12,8 @@ VALID_MSG_TYPES = {
     "broadcast",
 }
 
-def build_team_tools(manager: TeammateManager):
-    return [
+def build_team_tools(manager: TeammateManager, task_manager=None):
+    tools = [
         Tool(
             name="spawn_teammate",
             description="Spawn a persistent teammate that runs in its own thread.",
@@ -44,7 +44,8 @@ def build_team_tools(manager: TeammateManager):
         ),
         Tool(
             name="list_teammates",
-            description="List all teammates with name, role, status.",
+            description="List all teammates with name, role, status "
+                        "(working/idle/shutdown/crashed; crashed members have stale heartbeat and dead threads).",
             input_schema={
                 "type": "object",
                 "properties": {}
@@ -62,3 +63,18 @@ def build_team_tools(manager: TeammateManager):
         ),
         *build_protocol_tools("lead")
     ]
+    if task_manager is not None:
+        tools.append(Tool(
+            name="reclaim_teammate_tasks",
+            description="Reclaim all in-progress tasks owned by a teammate (typically a crashed one, "
+                        "see list_teammates): reset them to pending so others can claim.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "teammate": {"type": "string", "description": "The teammate whose tasks to reclaim."},
+                },
+                "required": ["teammate"],
+            },
+            handler=lambda **kw: task_manager.reclaim(kw["teammate"]),
+        ))
+    return tools

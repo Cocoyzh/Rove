@@ -77,7 +77,7 @@ export interface TaskItem {
 export interface TeammateMember {
   name: string;
   role: string;
-  status: 'working' | 'idle' | 'shutdown';
+  status: 'working' | 'idle' | 'shutdown' | 'crashed';
 }
 
 export interface TeamConfig {
