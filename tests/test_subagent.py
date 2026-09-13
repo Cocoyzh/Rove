@@ -50,7 +50,8 @@ class FakeLLM(BaseLLMAdapter):
         self.calls.append(request)
         if self._behavior is not None:
             return self._behavior(len(self.calls), request)
-        return self._responses.pop(0)
+        # 与真实适配器一致：累计 usage 计数器
+        return self._record_usage(self._responses.pop(0))
 
     def stream(self, request, on_text=None):
         return self.complete(request)
