@@ -184,12 +184,29 @@ class SessionConnection:
                     output_tokens=self.agent.session_output_tokens,
                     last_context_tokens=self.agent.last_context_tokens,
                 )
+                # 旁路命名：首轮回复结束后用独立小 prompt 生成会话标题（失败静默，不影响主流程）
+                self._autotitle(query)
                 self._send_json_threadsafe({
                     "type": "done",
                     "session_id": self.session_id,
                 })
 
         await asyncio.to_thread(worker)
+
+    def _autotitle(self, query: str) -> None:
+        """TitleService：同一会话只自动命名一次；手动命名（title_source=manual）不被覆盖。"""
+        side_prompts = getattr(self.app_state, "side_prompts", None)
+        if side_prompts is None:
+            return
+        session = self.app_state.session_manager.get_session(self.session_id)
+        if session is not None and session.get("title_source") not in (None, "auto"):
+            return
+        title = side_prompts.generate_title(query, session_id=self.session_id)
+        if title and self.app_state.session_manager.set_side_title(self.session_id, title):
+            self._send_json_threadsafe({
+                "type": "session_title",
+                "title": title,
+            })
 
     def handle_approval_response(self, approval_id: str, decision: str) -> None:
         self.approval_mgr.resolve(approval_id, decision)

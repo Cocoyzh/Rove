@@ -93,6 +93,7 @@ class SessionManager:
         session_data: Dict[str, Any] = {
             "id": session_id,
             "title": title,
+            "title_source": "auto",
             "created_at": now,
             "updated_at": now,
             "messages": [],
@@ -116,6 +117,7 @@ class SessionManager:
                 return None
 
     def update_session_title(self, session_id: str, title: str) -> Optional[Dict[str, Any]]:
+        """用户手动改名：title_source 标记为 manual，永不被旁路自动命名覆盖。"""
         path = self._file_path(session_id)
         with self._lock:
             if not path.exists():
@@ -123,6 +125,25 @@ class SessionManager:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 data["title"] = title
+                data["title_source"] = "manual"
+                data["updated_at"] = time.time()
+                path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                return data
+            except Exception:
+                return None
+
+    def set_side_title(self, session_id: str, title: str) -> Optional[Dict[str, Any]]:
+        """旁路 TitleService 写入自动命名：仅覆盖自动标题，绝不覆盖手动命名。"""
+        path = self._file_path(session_id)
+        with self._lock:
+            if not path.exists():
+                return None
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if data.get("title_source") == "manual":
+                    return data
+                data["title"] = title
+                data["title_source"] = "side_prompt"
                 data["updated_at"] = time.time()
                 path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
                 return data

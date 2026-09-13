@@ -130,7 +130,15 @@ class TeammateManger:
                 try:
                     request = LLMRequest(messages=messages, tools=tools,
                                          max_tokens=8000, system_prompt=sys_prompt)
-                    seq = agent_tracer.llm_start(query=prompt if first_llm_call else None)
+                    seq = agent_tracer.llm_start(
+                        query=prompt if first_llm_call else None,
+                        composition={
+                            "system_segments": ["teammate_role"],
+                            "memory_block": False,
+                            "message_count": len(messages),
+                            "tool_count": len(tools),
+                        },
+                    )
                     first_llm_call = False
                     response: LLMResponse = self._llm.complete(request)
                     agent_tracer.llm_end(seq, response)

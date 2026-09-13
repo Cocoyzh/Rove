@@ -176,7 +176,7 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
             messages=self._convert_messages(request.messages),  # type: ignore[arg-type]
             model=self.model,
             system=request.system_prompt,
-            tools=request.tools,
+            tools=request.tools if request.tools else None,
             max_tokens=request.max_tokens
         )
 

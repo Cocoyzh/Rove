@@ -6,6 +6,7 @@ from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR
 from rove.permissions import APPROVAL_MANAGER, VALID_APPROVAL_MODES
 from rove.tools.agent_teams import TeammateManger
 from rove.call_trace import CallTracer, new_session_id
+from rove.side_prompts import SidePromptService
 from rich.console import Console
 from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
 import readline
@@ -76,6 +77,8 @@ def main() -> None:
     )
 
     lead = LeadAgent(llm, registry, 50, tracer=team_manager.tracer.for_agent("lead"))
+    side_prompts = SidePromptService(llm)
+    titled = False
     while True:
         query = APPROVAL_MANAGER.read_input(PROMPT)
         if query.strip().lower() in ("q", "exit", ""):
@@ -113,7 +116,13 @@ def main() -> None:
             continue
         answer = lead.run(query)
         if not (answer and answer.strip()):
-            console.print("[dim](empty response)[/dim]")
+            console.print("(empty response)")
+        # 旁路命名（REPL 与 Web 共用 TitleService）：首轮回复结束后生成一次会话标题
+        if not titled:
+            titled = True
+            title = side_prompts.generate_title(query)
+            if title:
+                console.print(f"[dim]✦ 会话标题: {title}[/dim]")
 
 if __name__ == "__main__":
     main()

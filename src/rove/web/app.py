@@ -13,6 +13,7 @@ from rove.skill_loader import SkillLoader
 from rove.tools.agent_teams import TeammateManger
 from rove.llm_adapters import AnthropicLLMAdapter
 from rove.call_trace import load_trace_events, load_block_full
+from rove.side_prompts import SidePromptService
 from rove.web.session_manager import SessionManager
 from rove.web.websocket_handler import websocket_endpoint
 from fastapi import WebSocket
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
         context_window=int(ctx_override) if ctx_override else None,
     )
     team_manager = TeammateManger(TEAM_DIR, task_manager, llm)
+    side_prompts = SidePromptService(llm)
 
     # 附加到 app.state 便于后续 WebSocket 和服务共享
     app.state.task_manager = task_manager
@@ -62,6 +64,7 @@ def create_app() -> FastAPI:
     app.state.session_manager = session_manager
     app.state.llm = llm
     app.state.team_manager = team_manager
+    app.state.side_prompts = side_prompts
 
     # ==================== 会话管理接口 ====================
 

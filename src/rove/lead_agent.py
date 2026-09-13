@@ -1,9 +1,9 @@
 import json
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 from rich.console import Console
 from rove.tool_registry import ToolRegistry
-from rove.prompt.system_prompt import SYSTEM_PROMPT
+from rove.prompt.system_prompt import SYSTEM_PROMPT, SEGMENT_ORDER
 from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES, compact_history
 from rove.memory import MEMORY
 from rove.tools.message_bus import BUS
@@ -21,15 +21,17 @@ def _store_l4_summary(summary: str) -> None:
     MEMORY.long_term.store("episodic", f"summary_{int(time.time())}", summary[:2000])
 
 
-def _build_system_prompt(query: str) -> str:
-    """System Prompt = 核心指令 + 记忆块（工作记忆 + 长期记忆检索）。
+def _build_system_prompt(query: str) -> Tuple[str, Dict]:
+    """System Prompt = 分段拼装（身份/环境/工具/记忆/团队/技能）+ 记忆块尾部注入。
 
     记忆走 system prompt 注入，天然位于压缩流水线之外，永不失忆。
+    同时返回请求构成记录（system 各段 + 记忆块有无），供 CallTrace 的 request_composition 使用。
     """
     memory_block = MEMORY.build_system_context(query)
+    composition: Dict = {"system_segments": list(SEGMENT_ORDER), "memory_block": bool(memory_block)}
     if memory_block:
-        return f"{SYSTEM_PROMPT}\n\n{memory_block}"
-    return SYSTEM_PROMPT
+        return f"{SYSTEM_PROMPT}\n\n{memory_block}", composition
+    return SYSTEM_PROMPT, composition
 
 
 class LeadAgent:
@@ -106,10 +108,14 @@ class LeadAgent:
 
                 try:
                     seq = None
+                    system_prompt, prompt_composition = _build_system_prompt(query if step == 0 else "")
                     request = LLMRequest(messages=self.messages, tools=self.tools,
                                          max_tokens=8000,
-                                         system_prompt=_build_system_prompt(query if step == 0 else ""))
-                    seq = self.tracer.llm_start(query=query if step == 0 else None)
+                                         system_prompt=system_prompt)
+                    prompt_composition["message_count"] = len(self.messages)
+                    prompt_composition["tool_count"] = len(self.tools)
+                    seq = self.tracer.llm_start(query=query if step == 0 else None,
+                                                composition=prompt_composition)
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     self.tracer.llm_end(seq, response)
                     if response.content:

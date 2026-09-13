@@ -114,8 +114,16 @@ class AgentTracer:
 
     # ---------- LLM 调用 ----------
 
-    def llm_start(self, query: Optional[str] = None) -> Optional[int]:
-        """LLM 调用开始。query 非空时作为 user_message 输入块；此前累积的 tool_result 一并作为输入。"""
+    def llm_start(
+        self,
+        query: Optional[str] = None,
+        composition: Optional[Dict[str, Any]] = None,
+    ) -> Optional[int]:
+        """LLM 调用开始。query 非空时作为 user_message 输入块；此前累积的 tool_result 一并作为输入。
+
+        composition：请求构成记录（system 各段、记忆块有无、消息/工具数量），
+        写入事件的 request_composition 字段，供检查器回答"这次调用为什么发生"。
+        """
         tracer = self._tracer
         blocks: List[Dict[str, Any]] = []
         if query is not None:
@@ -126,6 +134,8 @@ class AgentTracer:
             tracer._seq += 1
             seq = tracer._seq
         event = self._base_event(seq, KIND_LLM_CALL, STATUS_RUNNING, blocks=blocks)
+        if composition is not None:
+            event["request_composition"] = composition
         with tracer._lock:
             self._running[seq] = event
         tracer._emit(event)
@@ -243,6 +253,7 @@ class AgentTracer:
             "latency_ms": 0,
             "started_at": time.time(),
             "error": None,
+            "request_composition": None,
             "blocks": blocks,
         }
 

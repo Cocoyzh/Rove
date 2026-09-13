@@ -301,6 +301,10 @@ def test_websocket_call_event_stream():
     from starlette.testclient import TestClient
     from rove.paths import TRACE_DIR
 
+    class _NoopSidePrompts:
+        def generate_title(self, query, session_id=None):
+            return None
+
     llm = MockLLM([
         LLMResponse(
             content="任务完成",
@@ -312,7 +316,9 @@ def test_websocket_call_event_stream():
         ),
     ])
     original_llm = web_app.app.state.llm
+    original_side_prompts = web_app.app.state.side_prompts
     web_app.app.state.llm = llm
+    web_app.app.state.side_prompts = _NoopSidePrompts()
     client = TestClient(web_app.app)
     res = client.post("/api/sessions", json={"title": "WS call_event 测试"})
     sid = res.json()["id"]
@@ -343,6 +349,7 @@ def test_websocket_call_event_stream():
         assert "full" not in final_ev["blocks"][-1]
     finally:
         web_app.app.state.llm = original_llm
+        web_app.app.state.side_prompts = original_side_prompts
         trace_file = TRACE_DIR / f"{sid}.jsonl"
         if trace_file.exists():
             trace_file.unlink()

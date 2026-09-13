@@ -79,13 +79,17 @@ class WebLeadAgent(LeadAgent):
 
                 try:
                     seq = None
+                    system_prompt, prompt_composition = _build_system_prompt(query if step == 0 else "")
                     request = LLMRequest(
                         messages=self.messages,
                         tools=self.tools,
                         max_tokens=8000,
-                        system_prompt=_build_system_prompt(query if step == 0 else ""),
+                        system_prompt=system_prompt,
                     )
-                    seq = self.tracer.llm_start(query=query if step == 0 else None)
+                    prompt_composition["message_count"] = len(self.messages)
+                    prompt_composition["tool_count"] = len(self.tools)
+                    seq = self.tracer.llm_start(query=query if step == 0 else None,
+                                                composition=prompt_composition)
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     self.tracer.llm_end(seq, response)
                     if response.content:
