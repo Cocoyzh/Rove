@@ -1,7 +1,4 @@
-"""长短期记忆系统测试 (Issue #4)。
-
-全部使用 tmp_path 隔离的 MemoryManager 实例，不触碰真实 .rove/memory/。
-"""
+"""长短期记忆系统测试 (Issue #4)，都用 tmp_path 隔离的 MemoryManager。"""
 import json
 
 from rove.memory import (

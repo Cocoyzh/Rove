@@ -1,8 +1,4 @@
-"""SWE-Bench 评测适配层（docs/swe-bench.md）。
-
-职责单一：实例加载、任务提示词渲染、patch 提取、predictions 聚合。
-真正的 Agent 运行与官方 Docker harness 评测发生在评测机上。
-"""
+"""SWE-Bench 适配层：实例加载、提示词渲染、patch 提取、predictions 聚合。"""
 
 import json
 import subprocess
@@ -54,11 +50,7 @@ def load_instances(path: Path) -> list[SwebenchInstance]:
 
 
 def build_task_prompt(instance: SwebenchInstance, max_chars: int = 12_000) -> str:
-    """把 issue 渲染为 Rove 的任务指令。
-
-    明确验收标准与禁区（改测试=作弊），problem_statement 过长时截断——
-    SWE-Bench 的 issue 偶有超长粘贴内容，价值密度集中在开头。
-    """
+    """把 issue 渲染成任务指令，problem_statement 过长时截断。"""
     statement = instance.problem_statement.strip()
     if len(statement) > max_chars:
         statement = statement[:max_chars] + "\n...[issue 内容过长已截断]"
@@ -82,11 +74,7 @@ def build_task_prompt(instance: SwebenchInstance, max_chars: int = 12_000) -> st
 
 
 def extract_patch(workspace: Path, base_commit: str = "") -> str:
-    """从实例仓库提取 unified diff（与 mini-swe-agent 同口径）。
-
-    git add -A 只动索引不动工作区文件；对 base_commit 取 --cached diff。
-    仓库不合法或无改动时返回空串，由调用方记为失败 patch。
-    """
+    """git add -A 后对 base_commit 取 --cached diff；仓库无效或无改动返回空串。"""
     workspace = Path(workspace)
     if not (workspace / ".git").exists():
         return ""
@@ -122,11 +110,7 @@ def write_predictions(rows: list[dict], out_path: Path, model_name: str = "rove"
 
 def run_bench(instances: list[SwebenchInstance], workspaces: dict[str, Path],
               agent_fn, out_path: Path, model_name: str = "rove") -> list[dict]:
-    """逐实例运行 Agent 并产出 predictions（评测机入口，不做单元测试覆盖）。
-
-    agent_fn(prompt: str, cwd: Path) -> None 由调用方注入
-    （内部构造 LeadAgent + FULL_ACCESS 模式的 ToolRegistry 并 run）。
-    """
+    """逐实例运行 agent_fn(prompt, cwd) 并产出 predictions（评测机入口）。"""
     rows = []
     for instance in instances:
         workspace = workspaces.get(instance.instance_id)

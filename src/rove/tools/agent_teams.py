@@ -12,7 +12,7 @@ from rove.llm_adapters import BaseLLMAdapter
 from rove.llm import LLMResponse, LLMRequest
 from rove.messages import Message
 
-# Teammate 循环节奏与预算（plans/subagent-optimize.md P2）
+# Teammate 循环节奏与预算
 POLL_INTERVAL = 5        # 收件箱轮询周期（秒）
 IDLE_TIMEOUT = 60        # 空闲自弃等待时长（秒）
 DEFAULT_MAX_TOTAL_TURNS = 40   # 全生命周期 LLM 轮数预算，超限走优雅结束
@@ -63,7 +63,7 @@ class TeammateManager:
             member["status"] = status
             self._save_config()
 
-    # ---------- 心跳与死亡感知（P2.1） ----------
+    # ---------- 心跳与死亡感知 ----------
 
     def _heartbeat_path(self, name: str) -> Path:
         return self.dir / "heartbeat" / name
@@ -81,12 +81,7 @@ class TeammateManager:
         return (time.time() - path.stat().st_mtime) > HEARTBEAT_STALE_TURNS * self.poll_interval
 
     def _check_health(self) -> None:
-        """死亡感知：线程已退出（或本进程从未启动）且心跳过期 → 标记 crashed。
-
-        覆盖两类崩溃：线程体内未捕获异常（由 _teammate_loop 兜底先行标记，
-        此处兜底复核）与 kill -9 / 进程重启后遗留的 working/idle 成员。
-        已优雅退出的 shutdown 成员不算崩溃。
-        """
+        """线程已退出且心跳过期的 working/idle 成员标记为 crashed（shutdown 不算）。"""
         changed = False
         for m in self.config["members"]:
             name = m["name"]
@@ -101,7 +96,7 @@ class TeammateManager:
         if changed:
             self._save_config()
 
-    # ---------- 优雅结束与取消（P2.2 / P2.3） ----------
+    # ---------- 优雅结束与取消 ----------
 
     @staticmethod
     def _is_cancel(msg: dict) -> bool:
@@ -360,7 +355,7 @@ class TeammateManager:
                 build_scan_tasks_tool(self._task_manager),
                 build_claim_task_tool(self._task_manager, name),
             ])
-        # 团队公用知识库：Teammates 只拥有长期记忆的只读检索（Issue #4 Phase 4）
+        # 团队公用知识库：Teammates 只拥有长期记忆的只读检索（Issue #4）
         from ..tools.memory_tools import build_memory_recall_tool
         registry.register_many([*FILE_TOOLS, build_memory_recall_tool(), *teammate_tools])
         self._tool_registries[name] = registry

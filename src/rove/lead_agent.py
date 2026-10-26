@@ -21,10 +21,7 @@ def _store_l4_summary(summary: str) -> None:
 
 
 def _build_system_prompt(query: str) -> str:
-    """System Prompt = 核心指令 + 记忆块（工作记忆 + 长期记忆检索）。
-
-    记忆走 system prompt 注入，天然位于压缩流水线之外，永不失忆。
-    """
+    """System Prompt = 核心指令 + 记忆块（工作记忆 + 长期记忆检索）。"""
     memory_block = MEMORY.build_system_context(query)
     if memory_block:
         return f"{SYSTEM_PROMPT}\n\n{memory_block}"

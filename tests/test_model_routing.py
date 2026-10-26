@@ -1,10 +1,4 @@
-"""模型路由（plans/subagent-optimize.md P3）单测。
-
-覆盖验收标准：
-- LLM_FAST_MODEL_ID 未配置时行为与现在完全一致（回归保障）；
-- 配置后 dispatch_subagent 默认路由 fast 模型，显式 "fast"/具体 id 亦可；
-- 适配器工厂按 model id 缓存实例；成本按模型分别计价。
-"""
+"""模型路由单测：LLM_FAST_MODEL_ID 未配置时行为不变，配置后子代理默认用 fast 模型。"""
 
 import pytest
 

@@ -36,9 +36,8 @@ def build_default_registry(
         web_search_tool,
         run_bg_tool,
         check_bg_tool,
-        # 一次性子代理：权限策略复用 lead 实例（模式切换同步生效），
-        # 不入 _ALLOWED_TOOLS / _ASK_TOOLS，默认走 ASK 兜底审批；
-        # 配置 LLM_FAST_MODEL_ID 时探索类子代理默认路由到廉价模型（P3）
+        # 一次性子代理：复用 lead 的权限策略（模式切换同步生效），默认走 ASK 审批；
+        # 配置了 LLM_FAST_MODEL_ID 时默认用廉价模型
         build_subagent_tool(SubagentManager(
             team_manager.llm,
             permission_policy=registry.permission_policy,

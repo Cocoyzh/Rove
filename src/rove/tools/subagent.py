@@ -1,14 +1,7 @@
-"""dispatch_subagent：一次性子代理派发（Task 工具模式，plans/subagent-optimize.md P0/P1）。
+"""dispatch_subagent：一次性子代理。
 
-Lead 把有边界的子任务外包给一个独立上下文窗口里的 subagent：
-- 全新独立消息历史，只拿到 lead 显式传入的 objective/context 简报；
-- 有界执行：max_turns / token_budget 超限即终止并返回已得结论；
-- 专用受限注册表（文件工具 + execute_python）：不含 team 工具（防递归）、
-  memory 写工具（防越权）、web_search（防外呼）、dispatch_subagent 自身（防自递归）；
-- 只把浓缩后的结构化报告作为 tool_result 回传 lead，中间轮次全部隔离在子上下文里。
-
-P0：同步阻塞语义（并发上限常量预留）；P1：run_in_background 异步派发复用
-run_background/check_background 通知管道，每轮向 lead inbox 写轻量进度心跳。
+在独立上下文里跑有边界的子任务，只把浓缩报告回传 lead；
+子代理只有文件工具和 execute_python（不能派发、写记忆或联网）。
 """
 
 import time
@@ -27,7 +20,7 @@ from rove.tools.file_tools import FILE_TOOLS
 from rove.tools.message_bus import BUS, MessageBus
 from rove.tool_registry import Tool, ToolRegistry
 
-# P0 为同步阻塞语义，lead 一次只跑 1 个；并发上限常量先行预留，P1 后台化后同样生效
+# 同时运行的子代理数上限
 MAX_CONCURRENT_SUBAGENTS = 1
 DEFAULT_MAX_TURNS = 12
 DEFAULT_TOKEN_BUDGET = 100_000
@@ -317,13 +310,7 @@ class SubagentManager:
         )
 
     def _resolve_adapter(self, model: str | None) -> BaseLLMAdapter:
-        """模型路由（P3）：显式 model > fast 缺省 > 主模型。
-
-        - model="fast" → LLM_FAST_MODEL_ID；未配置时回落主适配器（与现状一致）；
-        - model=具体 id → 适配器工厂按 id 缓存获取；
-        - 未指定 → 配置了 LLM_FAST_MODEL_ID 时探索类子代理默认走 fast，
-          否则用主适配器（LLM_FAST_MODEL_ID 未配置时行为完全不变）。
-        """
+        """选模型："fast" 或未指定时用 LLM_FAST_MODEL_ID（未配置则用主模型），具体 id 走适配器工厂。"""
         if model == "fast":
             return self._factory.get(self._fast_model_id) if self._fast_model_id else self._llm
         if model:

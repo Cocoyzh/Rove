@@ -201,7 +201,7 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
         return self._record_usage(self._build_response(message=final, latency_ms=latency_ms))
 
 
-# ==================== 模型路由（plans/subagent-optimize.md P3） ====================
+# ==================== 模型路由 ====================
 
 class AdapterFactory:
     """按 model id 缓存适配器实例：同 id 复用同一 adapter（及其懒加载 client），
@@ -241,10 +241,9 @@ class AdapterFactory:
 ADAPTER_FACTORY = AdapterFactory()
 
 
-# ==================== 成本核算（P3） ====================
+# ==================== 成本核算 ====================
 
-# 每百万 token 单价（USD）：(input, output)。字段口径与 context-optimize
-# 分支的定价表对齐；未知模型按 DEFAULT_PRICING 估算。
+# 每百万 token 单价（USD）：(input, output)，未知模型按 DEFAULT_PRICING 估算。
 MODEL_PRICING = {
     "claude-opus-5": (15.0, 75.0),
     "claude-sonnet-5": (3.0, 15.0),

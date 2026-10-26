@@ -10,7 +10,7 @@ VALID_PROTOCOL_TYPES = ["shutdown", "plan_review", "cancel"]
 PROTOCOL_RULES = {
     "shutdown": {"initiators": {"lead"}},
     "plan_review": {"initiators": set()},
-    # P2 取消协议：lead 中止某个 teammate，teammate 收尾退出并先发总结
+    # 取消协议：lead 中止某个 teammate，teammate 收尾退出并先发总结
     "cancel": {"initiators": {"lead"}},
 }
 

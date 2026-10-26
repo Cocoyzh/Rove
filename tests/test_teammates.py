@@ -1,13 +1,6 @@
-"""Teammate 健壮性修补（plans/subagent-optimize.md P2）单测。
+"""Teammate 健壮性单测：心跳与崩溃感知、取消协议、空闲/轮数超限的优雅结束。
 
-覆盖验收标准：
-- 心跳每轮刷新；线程死亡 + 心跳过期 → list_teammates 标记 crashed，任务可 reclaim；
-- cancel 取消协议：teammate 应答后收尾退出并先发工作总结；
-- 空闲自弃 / 轮数超限均走优雅结束路径（先总结，再 shutdown）；
-- 线程异常统一捕获：标记 crashed + 写 lead 收件箱，不允许静默死亡。
-
-节奏常量（poll_interval/idle_timeout/max_total_turns）均可在构造时缩小，
-测试用 0.05s 轮询 + 0.2s 空闲超时保证快速收敛。
+节奏常量在构造时缩小（0.05s 轮询、0.2s 空闲超时），保证测试快速收敛。
 """
 
 import json

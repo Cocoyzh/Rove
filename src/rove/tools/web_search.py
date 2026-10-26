@@ -1,8 +1,4 @@
-"""联网搜索工具（docs/web-search.md）：可插拔后端，零硬依赖。
-
-权限姿态：web_search 不入 _ALLOWED_TOOLS，STRICT/WORKSPACE 模式下逐次
-审批（搜索会把 query 发往外部服务，属于对外泄露面），FULL_ACCESS 自动放行。
-"""
+"""联网搜索工具：可插拔后端（Tavily / DuckDuckGo）。query 会发往外部服务，所以默认走 ASK 审批。"""
 
 import json
 import os
@@ -104,10 +100,7 @@ class DuckDuckGoBackend(SearchBackend):
 
 
 def get_search_backend() -> Optional[SearchBackend]:
-    """按 ROVE_SEARCH_PROVIDER 选择后端（auto|tavily|duckduckgo|none）。
-
-    auto：有 TAVILY_API_KEY 用 Tavily，否则退化到免 key 的 DuckDuckGo。
-    """
+    """按 ROVE_SEARCH_PROVIDER 选后端（auto|tavily|duckduckgo|none）；auto 有 TAVILY_API_KEY 用 Tavily，否则 DuckDuckGo。"""
     provider = os.getenv("ROVE_SEARCH_PROVIDER", "auto").strip().lower()
     if provider == "none":
         return None

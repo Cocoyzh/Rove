@@ -277,12 +277,7 @@ class CommandClassifier:
         return True, ""
 
     def find_workspace_escape(self, command: str) -> str | None:
-        """返回命令中第一个逃出工作区的路径参数（不逃逸返回 None）。
-
-        与 classify() 的白名单无关，供权限策略对所有 bash 命令（含非只读）
-        做工作区边界硬检查：以 / 或 ~ 开头、或含 .. 的参数都会解析比对，
-        逃逸即返回该 token。无法分词时保守返回占位串以触发拒绝。
-        """
+        """返回第一个逃出工作区的路径参数，没有则返回 None；无法分词时返回占位串以触发拒绝。"""
         if not isinstance(command, str) or not command.strip():
             return None
 
@@ -305,11 +300,7 @@ class CommandClassifier:
         return None
 
     def is_workspace_redirection(self, command: str) -> bool:
-        """判断命令的输出重定向是否全部落在工作区内。
-
-        供 WORKSPACE 权限模式使用：仅当命令确实包含文件重定向、且不含
-        动态展开/换行、每个重定向目标都可解析为工作区内路径时返回 True。
-        """
+        """命令含文件重定向且目标全部在工作区内时返回 True（WORKSPACE 模式用）。"""
         if not isinstance(command, str):
             return False
         cmd = command.strip()
