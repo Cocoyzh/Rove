@@ -176,3 +176,19 @@ class TaskManager:
             task["status"] = "in_progress"
             path.write_text(json.dumps(task, indent=2))
         return f"Claimed Task #{task_id} for {owner}."
+
+    def reclaim(self, owner: str) -> str:
+        """回收某个 owner（通常为 crashed teammate）名下所有进行中任务：
+        重置为 pending 且清空 owner，使其可被其他成员重新认领。"""
+        reclaimed_ids = []
+        with self._claim_lock:
+            for f in self.dir.glob("task_*.json"):
+                task = json.loads(f.read_text())
+                if task.get("owner") == owner and task.get("status") == "in_progress":
+                    task["owner"] = ""
+                    task["status"] = "pending"
+                    f.write_text(json.dumps(task, indent=2, ensure_ascii=False))
+                    reclaimed_ids.append(task["id"])
+        if not reclaimed_ids:
+            return f"No in-progress tasks owned by {owner}."
+        return f"Reclaimed {len(reclaimed_ids)} task(s) from {owner}: {reclaimed_ids}"

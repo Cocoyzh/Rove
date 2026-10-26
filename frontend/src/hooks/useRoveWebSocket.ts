@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode } from '../types/rove';
+import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode, SubagentRun } from '../types/rove';
 
 interface UseRoveWebSocketOptions {
   sessionId: string | null;
@@ -14,6 +14,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('workspace');
+  const [subagents, setSubagents] = useState<SubagentRun[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pendingQueryRef = useRef<string | null>(null);
@@ -28,6 +29,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     setActiveToolSteps([]);
     setPendingApproval(null);
     setIsRunning(false);
+    setSubagents([]);
   }, []);
 
   useEffect(() => {
@@ -107,6 +109,23 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
                     : step
                 )
               );
+              break;
+
+            case 'subagent_status':
+              // SubAgent 起止/进度心跳：维护最近几条运行态供 TeamMonitor 展示
+              setSubagents((prev) => {
+                const next = prev.filter((s) => s.task_id !== data.task_id);
+                next.unshift({
+                  task_id: data.task_id,
+                  status: data.status,
+                  objective: data.objective,
+                  turn: data.turn,
+                  max_turns: data.max_turns,
+                  activity: data.activity,
+                  total_tokens: data.total_tokens,
+                });
+                return next.slice(0, 5);
+              });
               break;
 
             case 'approval_required':
@@ -255,6 +274,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     pendingApproval,
     isRunning,
     approvalMode,
+    subagents,
     sendMessage,
     sendApproval,
     sendCompact,

@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional, Callable
+import os
+import threading
+import time
 from rove.llm import LLMResponse, LLMRequest, Usage
 from rove.messages import Message, ToolCall
-import time
 
 CONTEXT_WINDOWS = {
     "claude-opus-5": 1_000_000,
@@ -197,3 +199,60 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
         latency_ms = int((end_time - start_time) * 1000)
 
         return self._record_usage(self._build_response(message=final, latency_ms=latency_ms))
+
+
+# ==================== 模型路由（plans/subagent-optimize.md P3） ====================
+
+class AdapterFactory:
+    """按 model id 缓存适配器实例：同 id 复用同一 adapter（及其懒加载 client），
+    供 dispatch_subagent 等旁路任务按需取用不同模型，避免重复建连。"""
+
+    def __init__(self):
+        self._adapters: dict[str, BaseLLMAdapter] = {}
+        self._lock = threading.Lock()
+
+    def get(self, model_id: str) -> BaseLLMAdapter:
+        with self._lock:
+            adapter = self._adapters.get(model_id)
+            if adapter is None:
+                adapter = self.build(model_id)
+                self._adapters[model_id] = adapter
+            return adapter
+
+    @staticmethod
+    def build(model_id: str) -> "AnthropicLLMAdapter":
+        return AnthropicLLMAdapter(
+            model=model_id,
+            api_key=os.getenv("LLM_API_KEY", ""),
+            base_url=os.getenv("LLM_BASE_URL"),
+            timeout=int(os.getenv("LLM_TIMEOUT", "60")),
+        )
+
+    @staticmethod
+    def resolve(role: str) -> str:
+        """角色名 → 具体 model id：main=LLM_MODEL_ID；
+        fast=LLM_FAST_MODEL_ID（未配置回落主模型，保证行为与现在一致）。"""
+        main = os.getenv("LLM_MODEL_ID", "claude-sonnet-5")
+        if role == "fast":
+            return os.getenv("LLM_FAST_MODEL_ID") or main
+        return role if role and role != "main" else main
+
+
+ADAPTER_FACTORY = AdapterFactory()
+
+
+# ==================== 成本核算（P3） ====================
+
+# 每百万 token 单价（USD）：(input, output)。字段口径与 context-optimize
+# 分支的定价表对齐；未知模型按 DEFAULT_PRICING 估算。
+MODEL_PRICING = {
+    "claude-opus-5": (15.0, 75.0),
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-haiku-4-5": (0.8, 4.0),
+}
+DEFAULT_PRICING = (3.0, 15.0)
+
+
+def estimate_cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    in_price, out_price = MODEL_PRICING.get(model_id, DEFAULT_PRICING)
+    return round((input_tokens * in_price + output_tokens * out_price) / 1_000_000, 6)

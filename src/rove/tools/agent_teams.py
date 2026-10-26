@@ -4,16 +4,27 @@ from pathlib import Path
 import threading
 from ..tool_registry import ToolRegistry, Tool
 from ..tools.file_tools import FILE_TOOLS
-from ..tools.protocol import build_protocol_tools
-from ..tools.message_bus import BUS, VALID_MSG_TYPES
+from ..tools.protocol import build_protocol_tools, respond_and_send
+from ..tools.message_bus import BUS, MessageBus, VALID_MSG_TYPES
 from rove.permissions import APPROVAL_MANAGER, PermissionPolicy
 from rove.paths import WORKSPACE_ROOT
 from rove.llm_adapters import BaseLLMAdapter
 from rove.llm import LLMResponse, LLMRequest
 from rove.messages import Message
 
-class TeammateManger:
-    def __init__(self, team_dir: Path, task_manager=None, llm: BaseLLMAdapter = None):
+# Teammate 循环节奏与预算（plans/subagent-optimize.md P2）
+POLL_INTERVAL = 5        # 收件箱轮询周期（秒）
+IDLE_TIMEOUT = 60        # 空闲自弃等待时长（秒）
+DEFAULT_MAX_TOTAL_TURNS = 40   # 全生命周期 LLM 轮数预算，超限走优雅结束
+HEARTBEAT_STALE_TURNS = 2      # 心跳过期阈值 = 2 × 轮询周期
+
+
+class TeammateManager:
+    def __init__(self, team_dir: Path, task_manager=None, llm: BaseLLMAdapter = None,
+                 poll_interval: float = POLL_INTERVAL,
+                 idle_timeout: float = IDLE_TIMEOUT,
+                 max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS,
+                 bus: MessageBus = BUS):
         self.dir = team_dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.dir / "config.json"
@@ -22,6 +33,15 @@ class TeammateManger:
         self._task_manager = task_manager
         self._tool_registries: dict[str, ToolRegistry] = {}
         self._llm = llm
+        self._bus = bus
+        self.poll_interval = poll_interval
+        self.idle_timeout = idle_timeout
+        self.max_total_turns = max_total_turns
+
+    @property
+    def llm(self) -> BaseLLMAdapter:
+        """本团队绑定的主模型适配器（dispatch_subagent 派发时复用）。"""
+        return self._llm
 
     def _load_config(self) -> dict:
         if self.config_path.exists():
@@ -43,6 +63,93 @@ class TeammateManger:
             member["status"] = status
             self._save_config()
 
+    # ---------- 心跳与死亡感知（P2.1） ----------
+
+    def _heartbeat_path(self, name: str) -> Path:
+        return self.dir / "heartbeat" / name
+
+    def _touch_heartbeat(self, name: str) -> None:
+        """mtime 即心跳：每轮工作与每次空闲轮询都刷新。"""
+        path = self._heartbeat_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(int(time.time())))
+
+    def _is_heartbeat_stale(self, name: str) -> bool:
+        path = self._heartbeat_path(name)
+        if not path.exists():
+            return True
+        return (time.time() - path.stat().st_mtime) > HEARTBEAT_STALE_TURNS * self.poll_interval
+
+    def _check_health(self) -> None:
+        """死亡感知：线程已退出（或本进程从未启动）且心跳过期 → 标记 crashed。
+
+        覆盖两类崩溃：线程体内未捕获异常（由 _teammate_loop 兜底先行标记，
+        此处兜底复核）与 kill -9 / 进程重启后遗留的 working/idle 成员。
+        已优雅退出的 shutdown 成员不算崩溃。
+        """
+        changed = False
+        for m in self.config["members"]:
+            name = m["name"]
+            if m.get("status") in ("shutdown", "crashed"):
+                continue
+            thread = self.threads.get(name)
+            if thread is not None and thread.is_alive():
+                continue
+            if self._is_heartbeat_stale(name):
+                m["status"] = "crashed"
+                changed = True
+        if changed:
+            self._save_config()
+
+    # ---------- 优雅结束与取消（P2.2 / P2.3） ----------
+
+    @staticmethod
+    def _is_cancel(msg: dict) -> bool:
+        return (msg.get("type") == "protocol_request"
+                and msg.get("protocol_type") == "cancel")
+
+    def _handle_cancel(self, name: str, msg: dict) -> None:
+        """应答取消协议并通知发起方；实际收尾由调用方的优雅结束路径完成。"""
+        try:
+            respond_and_send(
+                name, msg["request_id"], True,
+                {"reason": f"{name} acknowledged cancel, wrapping up."})
+        except Exception:
+            pass
+
+    def _generate_summary(self, name: str, messages: list, reason: str) -> str:
+        """结束前向 lead 汇报：做了什么 / 卡在哪 / 交接建议。"""
+        tail_lines = []
+        for m in messages[-6:]:
+            if m.content:
+                tail_lines.append(f"[{m.role}] {m.content[:300]}")
+        tail = "\n".join(tail_lines)
+        try:
+            resp: LLMResponse = self._llm.complete(LLMRequest(
+                messages=[Message(role="user", content=(
+                    "你即将退出团队。请用不超过 150 字向 lead 发一条工作总结，"
+                    "格式：做了什么 / 卡在哪 / 交接建议。"
+                    f"退出原因：{reason}\n\n近期对话片段：\n{tail}"))],
+                tools=[], max_tokens=600, system_prompt=None))
+            if resp.content and resp.content.strip():
+                return resp.content.strip()
+        except Exception:
+            pass
+        last_text = next((m.content for m in reversed(messages)
+                          if m.role == "assistant" and m.content), "")
+        return (f"[{name}] 工作总结（{reason}）：最后输出片段：{last_text[:500] or '（无）'}")
+
+    def _graceful_exit(self, name: str, messages: list, reason: str) -> None:
+        """空闲自弃 / 被取消 / 轮数超限的共同出口：先发总结，再置 shutdown。"""
+        summary = self._generate_summary(name, messages, reason)
+        try:
+            self._bus.send(name, "lead", summary, msg_type="message")
+        except Exception:
+            pass
+        self._set_status(name, "shutdown")
+
+    # ---------- 派生与主循环 ----------
+
     @staticmethod
     def _make_identity_block(name, role, team_name) -> Message:
         return Message(
@@ -54,7 +161,7 @@ class TeammateManger:
     def spawn(self, name: str, role: str, prompt: str) -> str:
         member = self._find_member(name)
         if member:
-            if member.get("status") not in ("idle", "shutdown"):
+            if member.get("status") not in ("idle", "shutdown", "crashed"):
                 return f"Error: '{name}' is currently {member['status']}"
             member['status'] = 'working'
             member['role'] = role
@@ -80,6 +187,20 @@ class TeammateManger:
         return f"Spawned '{name}' (role: {role})"
 
     def _teammate_loop(self, name: str, role: str, prompt: str):
+        """线程体：异常统一捕获，标记 crashed 并写 lead 收件箱，不允许静默死亡。"""
+        try:
+            self._loop_inner(name, role, prompt)
+        except Exception as e:
+            # 先写收件箱再置状态：观察到 crashed 时崩溃原因必须已可读
+            try:
+                self._bus.send(name, "lead",
+                         f"Teammate {name} crashed: {type(e).__name__}: {e}",
+                         msg_type="message")
+            except Exception:
+                pass
+            self._set_status(name, "crashed")
+
+    def _loop_inner(self, name: str, role: str, prompt: str):
         team_name = self.config["team_name"]
         sys_prompt = (
             f"You are '{name}', role: {role}, team: {team_name}. "
@@ -99,9 +220,7 @@ class TeammateManger:
             f"- Read your inbox regularly — the lead may send you messages or protocol requests."
         )
         messages: list[Message] = [Message(role="user", content=prompt)]
-
-        POLL_INTERVAL = 5
-        IDLE_TIMEOUT = 60
+        total_turns = 0
 
         while True:
             # ========== WORK ==========
@@ -110,17 +229,29 @@ class TeammateManger:
             tools = self._teammate_tools(name)
 
             for _ in range(50):
-                inbox = BUS.read_inbox(name)
+                if total_turns >= self.max_total_turns:
+                    self._graceful_exit(name, messages, reason=f"已达最大轮数预算（{self.max_total_turns}）")
+                    return
+
+                inbox = self._bus.read_inbox(name)
                 for msg in inbox:
+                    if self._is_cancel(msg):
+                        self._handle_cancel(name, msg)
+                        self._graceful_exit(name, messages, reason="被 lead 取消")
+                        return
                     messages.append(Message(role="user", content=json.dumps(msg)))
+
+                self._touch_heartbeat(name)
 
                 try:
                     request = LLMRequest(messages=messages, tools=tools,
                                          max_tokens=8000, system_prompt=sys_prompt)
                     response: LLMResponse = self._llm.complete(request)
                 except Exception:
-                    self._set_status(name, "idle")
-                    return
+                    # 交给 _teammate_loop 的崩溃兜底（原先静默置 idle 返回）
+                    raise
+                total_turns += 1
+                self._touch_heartbeat(name)
 
                 messages.append(Message(role="assistant",
                                         content=response.content,
@@ -148,18 +279,25 @@ class TeammateManger:
             self._set_status(name, "idle")
             resume = False
 
-            for _ in range(IDLE_TIMEOUT // max(POLL_INTERVAL, 1)):
-                time.sleep(POLL_INTERVAL)
+            ticks = max(int(self.idle_timeout // max(self.poll_interval, 0.001)), 1)
+            for _ in range(ticks):
+                time.sleep(self.poll_interval)
+                self._touch_heartbeat(name)
 
-                inbox = BUS.read_inbox(name)
-                if inbox:
-                    for msg in inbox:
-                        messages.append(Message(role="user", content=json.dumps(msg)))
+                inbox = self._bus.read_inbox(name)
+                for msg in inbox:
+                    if self._is_cancel(msg):
+                        self._handle_cancel(name, msg)
+                        self._graceful_exit(name, messages, reason="被 lead 取消")
+                        return
+                    messages.append(Message(role="user", content=json.dumps(msg)))
                     resume = True
+
+                if resume:
                     break
 
             if not resume:
-                self._set_status(name, "shutdown")
+                self._graceful_exit(name, messages, reason="空闲超时自弃")
                 return
 
             # 压缩后重新注入身份
@@ -232,9 +370,13 @@ class TeammateManger:
         return self._teammate_registry(sender).execute(tool_name, args)
 
     def list_all(self):
+        self._check_health()
         if not self.config["members"]:
             return "No teammates."
         lines = [f"Team: {self.config['team_name']}"]
         for m in self.config["members"]:
-            lines.append(f"{m['name']}, {m['role']}, {m['status']}")
+            line = f"{m['name']}, {m['role']}, {m['status']}"
+            if m["status"] == "crashed":
+                line += " (no heartbeat; reclaim its tasks via reclaim_teammate_tasks)"
+            lines.append(line)
         return "\n".join(lines)

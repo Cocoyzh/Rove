@@ -2,15 +2,16 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Kanban, Users, X } from 'lucide-react';
 import { TaskBoard } from './TaskBoard';
 import { TeamMonitor } from './TeamMonitor';
-import { TaskItem, TeamConfig } from '../types/rove';
+import { TaskItem, TeamConfig, SubagentRun } from '../types/rove';
 
 interface CollabPanelProps {
   isOpen: boolean;
   onClose: () => void;
   sessionId?: string | null;
+  subagents?: SubagentRun[];
 }
 
-export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose, sessionId }) => {
+export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose, sessionId, subagents }) => {
   const [activeTab, setActiveTab] = useState<'tasks' | 'team'>('tasks');
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [team, setTeam] = useState<TeamConfig | null>(null);
@@ -99,7 +100,7 @@ export const CollabPanel: React.FC<CollabPanelProps> = ({ isOpen, onClose, sessi
           {activeTab === 'tasks' ? (
             <TaskBoard tasks={tasks} onRefresh={fetchCollabData} isLoading={isLoading} />
           ) : (
-            <TeamMonitor team={team} onRefresh={fetchCollabData} isLoading={isLoading} />
+            <TeamMonitor team={team} subagents={subagents} onRefresh={fetchCollabData} isLoading={isLoading} />
           )}
         </div>
       </div>
