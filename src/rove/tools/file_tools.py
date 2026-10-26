@@ -157,9 +157,7 @@ def _extract_pdf_text(fp: Path) -> str:
 
 
 def _run_read_notebook(path: str, max_output_chars: int = 2000) -> str:
-    """结构化读取 Jupyter Notebook（Issue #8）：按 cell 提取代码与
-    Markdown 源码，输出做摘要（stream/result 截断、富媒体报类型、
-    error 带异常名），无需 agent 手写解析脚本。"""
+    """按 cell 读取 Jupyter Notebook (Issue #8)，输出做摘要。"""
     try:
         fp = _safe_path(path)
         nb = json.loads(fp.read_text(encoding="utf-8"))

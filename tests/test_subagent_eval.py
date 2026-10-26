@@ -1,9 +1,4 @@
-"""P4 评测 harness（plans/subagent-optimize.md §4-P4）单测。
-
-真实跑批需要 LLM API 与预算，这里验证 harness 自身的契约：
-任务加载、三种跑法注册表差异、指标采集、聚合与渲染。
-LLM 以 FakeLLM 注入，验收命令用与工作区无关的 true/false。
-"""
+"""subagent_eval harness 单测（FakeLLM 注入，不调真实 API）。"""
 
 import json
 from pathlib import Path

@@ -21,10 +21,7 @@ class PermissionDecision(str, Enum):
 
 
 class ApprovalMode(str, Enum):
-    """全局三档权限审批模式（Issue #5 Phase 4）。
-
-    安全底线在任何模式下都成立：硬拒绝命令与跨工作区文件写入一律 DENY。
-    """
+    """三档权限审批模式（Issue #5）；任何模式下硬拒绝命令和跨工作区写入都是 DENY。"""
     STRICT = "strict"            # 严格审查：只读白名单自动放行，其余一律审批
     WORKSPACE = "workspace"      # 工作区信任：工作区内写入/重定向自动放行，越界才审批
     FULL_ACCESS = "full_access"  # 完全访问：除安全底线外全自动（仅建议隔离环境使用）
@@ -259,12 +256,7 @@ class PermissionPolicy:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> str | None:
-        """bash/run_background 参数路径逃逸工作区即硬拒绝（Issue #9）。
-
-        与只读白名单和权限模式无关，对所有 bash 命令生效：阻止 find /
-        全盘遍历、ls .. 越界窥探以及任意工作区外路径访问。命令参数无法
-        区分读写意图，故按最严格的边界处理。
-        """
+        """bash/run_background 的参数路径逃出工作区即硬拒绝（Issue #9），与权限模式无关。"""
         if tool_name not in {"bash", "run_background"}:
             return None
 

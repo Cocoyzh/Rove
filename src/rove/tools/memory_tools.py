@@ -1,8 +1,4 @@
-"""记忆管理工具集 (Issue #4)：memory_store / memory_recall / memory_update。
-
-Lead 拥有全部三个工具；Teammates 只获得只读的 memory_recall（团队公用
-知识库，见 agent_teams._teammate_registry）。
-"""
+"""记忆工具 (Issue #4)：memory_store / memory_recall / memory_update；teammate 只有只读的 memory_recall。"""
 
 import time
 from typing import List
@@ -86,7 +82,7 @@ def build_memory_tools() -> List[Tool]:
 
 
 def build_memory_recall_tool() -> Tool:
-    """Teammates 只读检索工具（Phase 4：团队公用知识库）。"""
+    """Teammates 只读检索工具（团队公用知识库）。"""
 
     def _recall(query: str, category: str = None, limit: int = 5) -> str:
         results = MEMORY.long_term.recall(query, category=category, limit=limit)

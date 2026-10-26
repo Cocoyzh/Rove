@@ -168,11 +168,7 @@ def tool_result_budget(messages: list[Message], tool_results_dir: Path) -> list[
 
 # ---------------- L2 -------------------
 def micro_compact(messages: list[Message], tool_results_dir: Path | None = None) -> list[Message]:
-    """L2: 压缩较早轮次的超长工具输出。
-
-    提供 tool_results_dir 时把完整输出落盘并在消息中保留路径指针，
-    避免纯截断导致内容不可回溯；未提供时退化为首尾切片。
-    """
+    """L2: 压缩较早轮次的超长工具输出，有 tool_results_dir 时完整输出落盘并保留路径。"""
     tool_results = [msg for msg in messages if msg.role == "tool"]
     if len(tool_results) <= KEEP_RECENT:
         return messages
@@ -343,11 +339,7 @@ def _is_thinking_fragment(text: str) -> bool:
 
 
 def _summarize_history(llm: BaseLLMAdapter, messages: list[Message]) -> str:
-    """调 LLM 对对话历史做摘要，保留目标、发现、约束。
-
-    思考模型可能把 max_tokens 全部耗在 thinking 上，导致摘要为空或
-    只剩思维链碎片；此时加倍预算重试一次，保证摘要可用。
-    """
+    """调 LLM 摘要对话历史；思考模型把预算耗光导致摘要为空时，加倍 max_tokens 重试一次。"""
     conversation = _build_summary_input(messages)
     prompt = SUMMARY_PROMPT.format(conversation=conversation)
 
@@ -366,10 +358,7 @@ def _summarize_history(llm: BaseLLMAdapter, messages: list[Message]) -> str:
 
 
 def compact_history(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) -> list[Message]:
-    """L4: 前三层压不下去时，调 LLM 做全量摘要并保留近期尾部消息。
-
-    on_summary(summary)：摘要产出回调（如沉淀进长期记忆），由调用方注入。
-    """
+    """L4: 全量摘要并保留近期尾部消息；on_summary 回调接收摘要。"""
     transcript_path = _write_transcript(messages)
     console.print(f"[bold yellow]⚠ L4 压缩: 对话已存档[/bold yellow] [dim]{transcript_path}[/dim]")
 

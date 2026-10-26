@@ -271,7 +271,7 @@ class TestPermissionPolicy(unittest.TestCase):
 
 
 class TestTieredApprovalModes(unittest.TestCase):
-    """三档权限审批模式（Issue #5 Phase 4）：安全底线在任何模式下不变"""
+    """三档权限审批模式（Issue #5）：安全底线在任何模式下不变"""
 
     def setUp(self):
         self.workspace = Path(__file__).parent.parent.resolve()

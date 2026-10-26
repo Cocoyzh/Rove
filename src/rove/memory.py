@@ -1,10 +1,7 @@
-"""长短期记忆系统 (Issue #4)。
+"""长短期记忆 (Issue #4)。
 
-分层架构，本地文件自包含、零外部服务依赖（验收标准 #3）：
-- WorkingMemory  短期工作记忆黑板：当前目标 / 关键发现 / 聚焦文件 / 草稿，
-  每轮注入 System Prompt 作为结构化锚点（不入压缩流水线、永不失忆）；
-- LongTermMemory 长期记忆库：semantic / episodic / preference 三类条目，
-  JSONL 持久化到 .rove/memory/，跨会话继承，轻量关键词重叠检索。
+WorkingMemory：当前目标 / 发现 / 聚焦文件 / 草稿的黑板，每轮注入 System Prompt；
+LongTermMemory：semantic / episodic / preference 条目，JSONL 存在 .rove/memory/，关键词检索。
 """
 
 import json

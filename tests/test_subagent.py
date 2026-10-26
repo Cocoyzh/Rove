@@ -1,12 +1,4 @@
-"""dispatch_subagent（plans/subagent-optimize.md P0）单测。
-
-覆盖验收标准：
-- 受限注册表快照：不含 team/memory/web/background/自身派发工具；
-- max_turns / token_budget 超限终止并返回部分结论；
-- 同步派发只把结构化报告回传 lead（中间轮次隔离在子上下文）；
-- 超长报告落盘 .rove/tool-results/ 并内联指针；
-- 权限默认 ASK；并发上限生效。
-"""
+"""dispatch_subagent 单测：受限注册表、轮数/token 上限、报告回传与落盘、权限与并发上限。"""
 
 import threading
 from pathlib import Path
@@ -249,10 +241,10 @@ def test_concurrency_limit_blocks_second_dispatch(tmp_path):
     assert "usage: turns=1" in results["report"]
 
 
-# ---------- P1：后台化与进度心跳 ----------
+# ---------- 后台化与进度心跳 ----------
 
 def make_p1_manager(llm, tmp_path):
-    """P1 专用：bg/记录均指向测试实例，不污染全局 bg_manager 与真实收件箱。"""
+    """bg/记录均指向测试实例，不污染全局 bg_manager 与真实收件箱。"""
     from rove.tools.background import BackGroundManager
     from rove.tools.message_bus import MessageBus
 

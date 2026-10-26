@@ -1,21 +1,7 @@
-"""P4 效果评测最小闭环（plans/subagent-optimize.md §4-P4）。
+"""dispatch_subagent 效果评测：纯 lead / lead+teammate / lead+dispatch_subagent 三种跑法对比。
 
-固定 10 个探索/修改任务，对比三种跑法：纯 lead / lead+teammate / lead+dispatch_subagent。
-指标：成功率、lead 上下文峰值 token、总成本（按模型计价）、墙钟时间。
-
-隔离模型：paths.py 的 WORKSPACE_ROOT 在导入时绑定环境，因此每个
-(task × mode) 组合由独立子进程执行（ROVE_WORKSPACE 指向全新工作区），
-外层 orchestrator 聚合 JSON 结果并渲染对比表。
-
-用法：
-    python -m rove.benchmarks.subagent_eval run \
-        --tasks src/rove/benchmarks/tasks_subagent_eval.jsonl \
-        --modes lead,teammate,subagent \
-        --out .rove/eval/results.json \
-        [--append-plan plans/subagent-optimize.md]
-
-单跑（orchestrator 内部调用）：
-    python -m rove.benchmarks.subagent_eval single --task <json文件> --mode <m> --workspace <dir>
+每个 (任务 × 跑法) 在独立子进程里跑（WORKSPACE_ROOT 在导入时绑定），外层汇总结果。
+用法：python -m rove.benchmarks.subagent_eval run --tasks <jsonl> --modes lead,teammate,subagent --out <json>
 """
 
 import argparse
@@ -267,7 +253,7 @@ def _cmd_run(args) -> None:
 
     if args.append_plan:
         appendix = (
-            f"\n### P4 评测结果（{time.strftime('%Y-%m-%d %H:%M')}，任务集 {Path(args.tasks).name}）\n\n"
+            f"\n### 评测结果（{time.strftime('%Y-%m-%d %H:%M')}，任务集 {Path(args.tasks).name}）\n\n"
             f"{render_markdown(aggregate_results(results))}\n"
         )
         Path(args.append_plan).open("a", encoding="utf-8").write(appendix)

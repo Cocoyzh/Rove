@@ -4,7 +4,7 @@ from pathlib import Path
 import threading
 from rove.paths import INBOX_DIR
 
-# progress：subagent 每轮向 lead 写的轻量心跳（plans/subagent-optimize.md P1）
+# progress：subagent 每轮向 lead 写的轻量心跳
 VALID_MSG_TYPES = ["message", "broadcast", "progress"]
 
 class MessageBus:
