@@ -7,6 +7,7 @@ import {
   Archive,
   Terminal,
   Activity,
+  Zap,
   ChevronLeft,
   Check,
   X,
@@ -86,6 +87,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       : contextPct < 0.1
       ? '<0.1%'
       : `${contextPct.toFixed(1)}%`;
+
+  const cacheHitRate = systemStatus?.cache_hit_rate ?? 0;
+  const cacheHitLabel = cacheHitRate > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : '—';
 
   return (
     <aside
@@ -261,6 +265,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
                 <span className="font-mono text-slate-800 font-medium" title="当前会话所有往返交互消耗的输入与输出 Token 总和">
                   {(systemStatus?.session_tokens || 0).toLocaleString()}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-1">
+                  <Zap size={12} className="text-emerald-600" />
+                  <span className="font-medium text-slate-600">缓存命中</span>
+                </div>
+                <span
+                  className="font-mono text-slate-800 font-medium"
+                  title={`前缀缓存命中率：缓存读 ${(systemStatus?.cache_read_tokens || 0).toLocaleString()} / 全部输入 ${(systemStatus?.total_input_tokens || 0).toLocaleString()} tokens`}
+                >
+                  {cacheHitLabel}
                 </span>
               </div>
 

@@ -243,6 +243,16 @@ def test_anchor_excludes_synthetic_system_messages():
     assert all("<inbox>" not in c for c in user_contents), "合成收件箱消息不应被钉为锚点"
 
 
+def test_anchor_excludes_memory_turn_messages():
+    """黑板/长期记忆的回合注入消息不享有用户锚点保护（P1 前缀稳定化）：
+    每回合都会重注最新副本，旧副本可随中段剪除。"""
+    from rove.compaction.compaction_layers import _is_user_anchor
+
+    for prefix in ("<working-memory>", "<long-term-memory>"):
+        assert _is_user_anchor(Message(role="user", content=f"{prefix}\nGoal: 保持专注")) is False
+        assert _is_user_anchor(Message(role="user", content=f"真实需求 {prefix}")) is True
+
+
 def test_l2_persists_oversized_old_results(tmp_path):
     """L2 对滑出保留窗口的超长输出应落盘持久化并保留路径指针，
     全文可回溯，且已持久化的消息不会被二度处理。"""
@@ -594,3 +604,84 @@ def test_estimate_tokens_counts_tool_call_args():
     big = [Message(role="assistant", tool_calls=[ToolCall(tool_id="t", tool_name="bash", tool_args={"command": "cat " + "f " * 3000})])]
 
     assert estimate_messages_tokens(big) > estimate_messages_tokens(small) + 500
+
+
+# ---------------- P4：水位触发误差校准 ----------------
+def test_estimate_scale_calibration_from_real_usage():
+    """API 真实输入规模回调 estimate_scale（EMA），仅限已挂估算的 stream 主调用"""
+    from unittest.mock import MagicMock
+    from rove.llm import Usage
+
+    llm = AnthropicLLMAdapter(model="m", api_key="k", base_url=None, timeout=5)
+    assert llm.estimate_scale == 1.0
+
+    final = MagicMock()
+    final.content = []
+    final.model = "m"
+    final.stop_reason = "end_turn"
+    final.usage = Usage(input_tokens=1400, output_tokens=10)
+    llm._client = MagicMock()
+    ctx = llm._client.messages.stream.return_value.__enter__.return_value
+    ctx.get_final_message.return_value = final
+
+    request = LLMRequest(messages=[Message(role="user", content="hi")], tools=[],
+                         max_tokens=10, system_prompt="s")
+    llm.set_pending_estimate(1000)
+    llm.stream(request)
+
+    # 观测比例 1400/1000 = 1.4 → scale = 1.0*0.7 + 1.4*0.3 = 1.12
+    assert llm.estimate_scale == 1.12
+    # 消费后清空；complete 旁路（L4 摘要）不再触发校准
+    assert llm._pending_estimate is None
+    scale_before = llm.estimate_scale
+    llm._record_usage(LLMResponse(content="x", tool_calls=[], model="m", stop_reason="end_turn",
+                                  usage=Usage(input_tokens=5000, output_tokens=1)))
+    assert llm.estimate_scale == scale_before
+
+
+def test_estimate_scale_clamped():
+    from unittest.mock import MagicMock
+    from rove.llm import Usage
+
+    llm = AnthropicLLMAdapter(model="m", api_key="k", base_url=None, timeout=5)
+    final = MagicMock()
+    final.content = []
+    final.model = "m"
+    final.stop_reason = "end_turn"
+    final.usage = Usage(input_tokens=10_000_000, output_tokens=1)
+    llm._client = MagicMock()
+    ctx = llm._client.messages.stream.return_value.__enter__.return_value
+    ctx.get_final_message.return_value = final
+
+    llm.set_pending_estimate(1000)
+    llm.stream(LLMRequest(messages=[Message(role="user", content="hi")], tools=[],
+                          max_tokens=10, system_prompt="s"))
+    assert llm.estimate_scale == 2.0  # 上限钳制，防止估算飞掉
+
+
+def test_estimate_messages_tokens_applies_scale_on_pure_path():
+    """纯估算路径乘以 estimate_scale；增量校准路径（有真实锚点）不叠加"""
+    dummy = DummyLLM()
+    messages = [Message(role="user", content="Hello world!")]
+    base = estimate_messages_tokens(messages, llm=dummy)
+
+    dummy.estimate_scale = 2.0
+    assert estimate_messages_tokens(messages, llm=dummy) == base * 2
+
+    dummy.last_input_tokens = 5000  # 切到增量校准路径
+    anchored = estimate_messages_tokens(messages, llm=dummy)
+    assert anchored > 5000 and anchored < 5200  # 未被 scale 翻倍
+
+
+def test_run_pipeline_sets_pending_estimate():
+    """未压缩轮次挂上本轮估算；压缩改写轮次置空，避免校准被污染"""
+    dummy = DummyLLM()
+    messages = [Message(role="user", content="短对话"), Message(role="assistant", content="ok")]
+    run_pipeline(dummy, messages)
+    assert dummy._pending_estimate == estimate_messages_tokens(messages, llm=dummy)
+    assert dummy._pending_estimate > 0
+
+    # 极小窗口强制全部水位触发（L4 会调 DummyLLM.complete 摘要）
+    tiny = DummyLLM(context_window=100)
+    run_pipeline(tiny, messages)
+    assert tiny._pending_estimate is None

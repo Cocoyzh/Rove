@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode, CallEvent } from '../types/rove';
+import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode, CallEvent, SubagentRun } from '../types/rove';
 
 interface UseRoveWebSocketOptions {
   sessionId: string | null;
@@ -16,6 +16,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('workspace');
   // 调用检查器数据：切换会话时从 /api/traces 回放历史，实时 call_event 按 seq upsert
   const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
+  const [subagents, setSubagents] = useState<SubagentRun[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pendingQueryRef = useRef<string | null>(null);
@@ -30,6 +31,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     setActiveToolSteps([]);
     setPendingApproval(null);
     setIsRunning(false);
+    setSubagents([]);
   }, []);
 
   // call_event 按 seq upsert（running 事件先占位，终态事件覆盖同 seq）
@@ -150,6 +152,23 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
                     : step
                 )
               );
+              break;
+
+            case 'subagent_status':
+              // SubAgent 起止/进度心跳：维护最近几条运行态供 TeamMonitor 展示
+              setSubagents((prev) => {
+                const next = prev.filter((s) => s.task_id !== data.task_id);
+                next.unshift({
+                  task_id: data.task_id,
+                  status: data.status,
+                  objective: data.objective,
+                  turn: data.turn,
+                  max_turns: data.max_turns,
+                  activity: data.activity,
+                  total_tokens: data.total_tokens,
+                });
+                return next.slice(0, 5);
+              });
               break;
 
             case 'approval_required':
@@ -299,6 +318,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     isRunning,
     approvalMode,
     callEvents,
+    subagents,
     sendMessage,
     sendApproval,
     sendCompact,

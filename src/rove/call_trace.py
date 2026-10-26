@@ -173,7 +173,8 @@ class AgentTracer:
         event.update({
             "status": STATUS_TOOL_USE if tool_calls else STATUS_OK,
             "model": getattr(response, "model", None),
-            "input_tokens": usage.input_tokens if usage else 0,
+            # 检查器展示请求全部输入规模；Usage.input_tokens 仅为未命中缓存部分
+            "input_tokens": usage.context_input_tokens if usage else 0,
             "output_tokens": usage.output_tokens if usage else 0,
             "cache_read_tokens": getattr(usage, "cache_read_tokens", None) if usage else None,
             "latency_ms": getattr(response, "latency_ms", 0) or 0,

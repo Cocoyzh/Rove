@@ -188,7 +188,10 @@ class SessionManager:
                 # 如果还是初始标题且有用户消息，自动提取前20个字作为标题
                 if auto_title and (data.get("title") in ("新会话", "未命名会话")):
                     for m in messages:
-                        if m.role == "user" and m.content and not m.content.startswith(("<inbox>", "<background-results>", "<reminder>")):
+                        if m.role == "user" and m.content and not m.content.startswith(
+                            ("<inbox>", "<background-results>", "<reminder>",
+                             "<working-memory>", "<long-term-memory>", "<tool-failure-hint>")
+                        ):
                             summary = m.content.strip().splitlines()[0][:25]
                             if summary:
                                 data["title"] = summary

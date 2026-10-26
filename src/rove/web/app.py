@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR, SESSIONS_DIR, PROJECT_ROOT
 from rove.task_manager import TaskManager
 from rove.skill_loader import SkillLoader
-from rove.tools.agent_teams import TeammateManger
+from rove.tools.agent_teams import TeammateManager
 from rove.llm_adapters import AnthropicLLMAdapter
 from rove.call_trace import load_trace_events, load_block_full
 from rove.side_prompts import SidePromptService
@@ -55,7 +55,7 @@ def create_app() -> FastAPI:
         timeout=int(os.getenv("LLM_TIMEOUT", "60")),
         context_window=int(ctx_override) if ctx_override else None,
     )
-    team_manager = TeammateManger(TEAM_DIR, task_manager, llm)
+    team_manager = TeammateManager(TEAM_DIR, task_manager, llm)
     side_prompts = SidePromptService(llm)
 
     # 附加到 app.state 便于后续 WebSocket 和服务共享
@@ -118,7 +118,7 @@ def create_app() -> FastAPI:
         if session_id:
             s_team_dir = TEAM_DIR / session_id
             if (s_team_dir / "config.json").exists():
-                tm = TeammateManger(s_team_dir, TaskManager(TASK_DIR / session_id), llm)
+                tm = TeammateManager(s_team_dir, TaskManager(TASK_DIR / session_id), llm)
                 config = tm.config
                 return {
                     "team_name": config.get("team_name", "default"),
@@ -144,11 +144,15 @@ def create_app() -> FastAPI:
                 session_tokens = s.get("total_input_tokens", 0) + s.get("total_output_tokens", 0)
 
         pct = round(session_ctx / llm.context_window * 100, 2) if (llm.context_window and session_ctx) else 0.0
-        
+
         # 项目总计开销持久化统计：汇总所有持久化会话消耗，并结合内存实时指标
         disk_total = session_manager.get_project_total_tokens()
         in_memory_total = llm.total_input_tokens + llm.total_output_tokens
         project_total = max(disk_total, in_memory_total, session_tokens)
+
+        # 前缀缓存命中率（进程级）：adapter 的 total_input_tokens 已是全部输入规模口径
+        cache_hit_rate = (llm.total_cache_read_tokens / llm.total_input_tokens
+                          if llm.total_input_tokens else 0.0)
 
         return {
             "model": llm.model,
@@ -160,6 +164,9 @@ def create_app() -> FastAPI:
             "project_total_tokens": project_total,
             "total_input_tokens": llm.total_input_tokens,
             "total_output_tokens": llm.total_output_tokens,
+            "cache_read_tokens": llm.total_cache_read_tokens,
+            "cache_creation_tokens": llm.total_cache_creation_tokens,
+            "cache_hit_rate": round(cache_hit_rate, 4),
             "call_count": llm.call_count,
         }
 

@@ -4,15 +4,31 @@ from rove.messages import Message, ToolCall
 
 @dataclass(frozen=True)
 class Usage:
+    """单次调用的 token 用量。
+
+    input_tokens 为 API 原始口径的未命中缓存输入；缓存读/写单列，
+    三者之和才是本次请求的全部输入规模（context_input_tokens）。
+    """
+
     input_tokens: int
     output_tokens: int
-    # 占位字段：context-optimize 分支将补齐缓存三元组（cache_read/creation/ttl），
-    # 本分支（tool-call-visualize）先以 cache_read 消费，便于调用检查器展示命中
     cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
     @property
     def total(self) -> int:
         return self.input_tokens + self.output_tokens
+
+    @property
+    def context_input_tokens(self) -> int:
+        """请求的全部输入规模，用于上下文占用统计。"""
+        return self.input_tokens + self.cache_read_tokens + self.cache_creation_tokens
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """前缀缓存命中率 = 缓存读 / 全部输入。"""
+        denom = self.context_input_tokens
+        return self.cache_read_tokens / denom if denom else 0.0
 
 @dataclass
 class LLMRequest:

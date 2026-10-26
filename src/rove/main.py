@@ -4,11 +4,12 @@ from rove.skill_loader import SkillLoader
 from rove.task_manager import TaskManager
 from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR
 from rove.permissions import APPROVAL_MANAGER, VALID_APPROVAL_MODES
-from rove.tools.agent_teams import TeammateManger
+from rove.tools.agent_teams import TeammateManager
 from rove.call_trace import CallTracer, new_session_id
 from rove.side_prompts import SidePromptService
 from rich.console import Console
 from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
+from rove.usage_ledger import LEDGER
 import readline
 import os
 from dotenv import load_dotenv
@@ -45,6 +46,19 @@ def show_status(lead: LeadAgent, llm: BaseLLMAdapter) -> None:
     console.print(f"  消耗 In/Out     {llm.total_input_tokens:,} / {llm.total_output_tokens:,}")
 
 
+def show_stats(lead: LeadAgent, title: str = "Stats") -> None:
+    """缓存命中率与成本小结（context-optimize P0），/stats 与退出小结共用。"""
+    s = LEDGER.summary()
+    console.rule(f"[bold cyan]{title}[/bold cyan]", style="cyan")
+    console.print(f"[cyan]调用次数[/cyan]          {s['calls']}")
+    console.print(f"[cyan]输入 In[/cyan]            {s['context_input_tokens']:,}  "
+                  f"[dim](未命中 {s['input_tokens']:,} / 缓存读 {s['cache_read_tokens']:,} / 缓存写 {s['cache_creation_tokens']:,})[/dim]")
+    console.print(f"[cyan]输出 Out[/cyan]           {s['output_tokens']:,}")
+    console.print(f"[cyan]前缀缓存命中率[/cyan]     {s['hit_rate'] * 100:.1f}%")
+    console.print(f"[cyan]估算成本[/cyan]           ${s['estimated_cost_usd']:.4f} [dim](内置定价表估算)[/dim]")
+    console.print(f"[cyan]本会话 In/Out[/cyan]      {lead.conv_input_tokens:,} / {lead.conv_output_tokens:,}")
+
+
 import sys
 
 
@@ -67,8 +81,8 @@ def main() -> None:
         context_window=int(ctx_override) if ctx_override else None,
     )
 
-    team_manager = TeammateManger(TEAM_DIR, task_manager, llm,
-                                  tracer=CallTracer(new_session_id()))
+    team_manager = TeammateManager(TEAM_DIR, task_manager, llm,
+                                   tracer=CallTracer(new_session_id()))
 
     registry = build_default_registry(
         skill_loader=skill_loader,
@@ -95,6 +109,9 @@ def main() -> None:
             continue
         if query.strip() == "/status":
             show_status(lead, llm)
+            continue
+        if query.strip() == "/stats":
+            show_stats(lead)
             continue
         if query.strip() == "/context":
             show_context(lead, llm)
@@ -123,6 +140,9 @@ def main() -> None:
             title = side_prompts.generate_title(query)
             if title:
                 console.print(f"[dim]✦ 会话标题: {title}[/dim]")
+
+    # 会话结束成本小结（context-optimize P0）
+    show_stats(lead, title="会话结束小结")
 
 if __name__ == "__main__":
     main()

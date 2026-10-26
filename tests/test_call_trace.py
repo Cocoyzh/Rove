@@ -58,7 +58,8 @@ def test_tracer_llm_call_lifecycle(tmp_path):
         model="mock-model",
         stop_reason="tool_use",
         latency_ms=1200,
-        usage=Usage(input_tokens=100, output_tokens=30, cache_read_tokens=80),
+        # Usage.input_tokens 为未命中部分：20 未命中 + 80 命中 = 全部输入 100
+        usage=Usage(input_tokens=20, output_tokens=30, cache_read_tokens=80),
         thinking="先读取文件内容",
     )
     agent.llm_end(seq, response)
@@ -243,9 +244,9 @@ def test_lead_agent_emits_trace_events(tmp_path):
 
 
 def test_teammate_tracer_view_via_team_manager(tmp_path):
-    from rove.tools.agent_teams import TeammateManger
+    from rove.tools.agent_teams import TeammateManager
 
-    tm = TeammateManger(tmp_path / "team", tracer=CallTracer("s_team", trace_dir=tmp_path))
+    tm = TeammateManager(tmp_path / "team", tracer=CallTracer("s_team", trace_dir=tmp_path))
     mate = tm.tracer.for_agent("bob")
     mseq = mate.llm_start(query="teammate prompt")
     mate.llm_end(mseq, LLMResponse(

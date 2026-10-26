@@ -77,12 +77,23 @@ export interface TaskItem {
 export interface TeammateMember {
   name: string;
   role: string;
-  status: 'working' | 'idle' | 'shutdown';
+  status: 'working' | 'idle' | 'shutdown' | 'crashed';
 }
 
 export interface TeamConfig {
   team_name: string;
   members: TeammateMember[];
+}
+
+// 一次性 SubAgent 运行态（后端 subagent_status WebSocket 事件）
+export interface SubagentRun {
+  task_id: string;
+  status: 'running' | 'completed' | 'error';
+  objective?: string;
+  turn?: number;
+  max_turns?: number;
+  activity?: string;
+  total_tokens?: number;
 }
 
 export interface SystemStatus {
@@ -95,6 +106,9 @@ export interface SystemStatus {
   project_total_tokens?: number;
   total_input_tokens?: number;
   total_output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  cache_hit_rate?: number;
   call_count?: number;
 }
 

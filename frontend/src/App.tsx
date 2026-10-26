@@ -73,6 +73,7 @@ export default function App() {
     isRunning,
     approvalMode,
     callEvents,
+    subagents,
     sendMessage,
     sendApproval,
     sendCompact,
@@ -219,6 +220,7 @@ export default function App() {
         isOpen={isCollabOpen}
         onClose={() => setIsCollabOpen(false)}
         sessionId={currentSessionId}
+        subagents={subagents}
       />
     </div>
   );

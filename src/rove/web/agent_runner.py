@@ -3,7 +3,13 @@ import time
 from typing import Callable, Optional, Dict, Any, List
 from rich.console import Console
 
-from rove.lead_agent import LeadAgent, _build_system_prompt, _store_l4_summary
+from rove.lead_agent import (
+    LeadAgent,
+    _build_system_prompt,
+    _request_composition,
+    _inject_synthetic,
+    _store_l4_summary,
+)
 from rove.prompt.system_prompt import SYSTEM_PROMPT
 from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES
 from rove.tools.message_bus import BUS
@@ -58,28 +64,28 @@ class WebLeadAgent(LeadAgent):
         reactive_retries = 0
         total_input_tokens = 0
         total_output_tokens = 0
+        total_cache_read = 0
 
         try:
             for step in range(self.max_steps):
                 inbox = BUS.read_inbox('lead')
                 if inbox:
-                    self.messages.append(
-                        Message(role="user", content=f"<inbox>{json.dumps(inbox, indent=2)}</inbox>")
-                    )
+                    _inject_synthetic(self.messages, f"<inbox>{json.dumps(inbox, indent=2)}</inbox>")
                 notifs = bg_manager.drain_notifications()
                 if notifs:
                     notif_text = "\n".join(
                         f"[bg:{n['task_id']}] {n['status']}: {n['result']}" for n in notifs
                     )
-                    self.messages.append(
-                        Message(role="user", content=f"<background-results>\n{notif_text}\n</background-results>")
-                    )
+                    _inject_synthetic(self.messages,
+                                      f"<background-results>\n{notif_text}\n</background-results>")
 
                 run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
+                has_memory = self._inject_memory_turn(query if step == 0 else "")
 
                 try:
                     seq = None
-                    system_prompt, prompt_composition = _build_system_prompt(query if step == 0 else "")
+                    system_prompt = _build_system_prompt()
+                    prompt_composition = _request_composition(has_memory)
                     request = LLMRequest(
                         messages=self.messages,
                         tools=self.tools,
@@ -95,11 +101,12 @@ class WebLeadAgent(LeadAgent):
                     if response.content:
                         console.print()
                     if response.usage:
-                        total_input_tokens += response.usage.input_tokens
+                        total_input_tokens += response.usage.context_input_tokens
                         total_output_tokens += response.usage.output_tokens
-                        self.session_input_tokens += response.usage.input_tokens
+                        total_cache_read += response.usage.cache_read_tokens
+                        self.session_input_tokens += response.usage.context_input_tokens
                         self.session_output_tokens += response.usage.output_tokens
-                        self.last_context_tokens = response.usage.input_tokens
+                        self.last_context_tokens = response.usage.context_input_tokens
                     reactive_retries = 0
                 except Exception as e:
                     self.tracer.llm_error(seq, str(e))
@@ -156,6 +163,9 @@ class WebLeadAgent(LeadAgent):
                         Message(role="tool", tool_call_id=tool.tool_id, content=output_str)
                     )
 
+                    if is_error:
+                        self._handle_tool_failure(tool.tool_name, output_str)
+
                     if tool.tool_name == "todo":
                         used_todo = True
 
@@ -167,14 +177,13 @@ class WebLeadAgent(LeadAgent):
                     if reminder_cooldown > 0:
                         reminder_cooldown -= 1
                     elif rounds_since_todo >= 4:
-                        self.messages.append(
-                            Message(
-                                role="user",
-                                content="<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>",
-                            )
+                        _inject_synthetic(
+                            self.messages,
+                            "<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>",
                         )
                         reminder_cooldown = 6
 
             return "Error: max_steps exceeded before the agent finished."
         finally:
-            console.print(f"[dim]⚡ In: {total_input_tokens} · Out: {total_output_tokens}[/dim]")
+            hit_pct = total_cache_read / total_input_tokens * 100 if total_input_tokens else 0
+            console.print(f"[dim]⚡ In: {total_input_tokens} (缓存命中 {hit_pct:.0f}%) · Out: {total_output_tokens}[/dim]")
