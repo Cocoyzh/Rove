@@ -38,8 +38,8 @@ L2_WATERMARK_RATIO = 0.10
 L1_WATERMARK_RATIO = 0.20
 L4_WATERMARK_RATIO = 0.40
 
-# L4 摘要输入预算（字符）
-SUMMARY_CHAR_BUDGET = 80_000
+# L4 摘要输入预算（字符）：适配 1M 上下文模型，允许上传约 8~10 万 Token 的对话材料
+SUMMARY_CHAR_BUDGET = 300_000
 
 # L4 摘要提示词
 SUMMARY_PROMPT = """请总结以下对话。直接输出下面这份结构化事实清单，不要输出任何思考过程或铺垫：
@@ -390,7 +390,7 @@ def compact_history(llm: BaseLLMAdapter, messages: list[Message], on_summary=Non
         except Exception as e:
             console.print(f"[yellow]⚠ L4 摘要回调失败: {e}[/yellow]")
 
-    tail_count = min(6, len(messages))
+    tail_count = min(10, len(messages))
     tail_start = max(0, len(messages) - tail_count)
     if 0 < tail_start < len(messages) and messages[tail_start].role == "tool":
         while tail_start > 0 and messages[tail_start - 1].role == "tool":

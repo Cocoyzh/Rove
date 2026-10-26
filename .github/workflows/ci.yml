@@ -58,6 +58,8 @@ jobs:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # test_web 需要 frontend/dist 才能托管 "/"，复用前端 job 的构建产物
+    needs: frontend
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +67,12 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
 
       - uses: actions/setup-python@v5
         with:

@@ -201,13 +201,14 @@ class TeammateManager:
         try:
             self._loop_inner(name, role, prompt)
         except Exception as e:
-            self._set_status(name, "crashed")
+            # 先写收件箱再置状态：观察到 crashed 时崩溃原因必须已可读
             try:
                 self._bus.send(name, "lead",
                          f"Teammate {name} crashed: {type(e).__name__}: {e}",
                          msg_type="message")
             except Exception:
                 pass
+            self._set_status(name, "crashed")
 
     def _loop_inner(self, name: str, role: str, prompt: str):
         team_name = self.config["team_name"]
