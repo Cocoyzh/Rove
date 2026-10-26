@@ -19,3 +19,7 @@ ROVE_DIR = WORKSPACE_ROOT / ".rove"
 TOOL_RESULTS_DIR = ROVE_DIR / "tool-results"
 TRANSCRIPT_DIR = ROVE_DIR / "transcripts"
 SESSIONS_DIR = ROVE_DIR / "sessions"
+# Agent 专属受控临时目录：子进程 TMPDIR 指向这里，避免污染宿主机 /tmp
+AGENT_TMP_DIR = ROVE_DIR / "tmp"
+# 长短期记忆根目录（工作记忆黑板 + 长期记忆 JSONL）
+MEMORY_DIR = ROVE_DIR / "memory"

@@ -222,7 +222,9 @@ class TeammateManger:
                 build_scan_tasks_tool(self._task_manager),
                 build_claim_task_tool(self._task_manager, name),
             ])
-        registry.register_many([*FILE_TOOLS, *teammate_tools])
+        # 团队公用知识库：Teammates 只拥有长期记忆的只读检索（Issue #4 Phase 4）
+        from ..tools.memory_tools import build_memory_recall_tool
+        registry.register_many([*FILE_TOOLS, build_memory_recall_tool(), *teammate_tools])
         self._tool_registries[name] = registry
         return registry
 

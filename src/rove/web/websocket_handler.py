@@ -7,9 +7,11 @@ from rich.console import Console
 from rove.paths import WORKSPACE_ROOT, TASK_DIR, TEAM_DIR
 from rove.task_manager import TaskManager
 from rove.tools.agent_teams import TeammateManger
-from rove.permissions import PermissionPolicy
+from rove.permissions import PermissionPolicy, VALID_APPROVAL_MODES
 from rove.tool_registry import ToolRegistry
 from rove.tools.todo import build_todo_tool
+from rove.tools.memory_tools import build_memory_tools
+from rove.tools.web_search import web_search_tool
 from rove.tools.tools_setup import (
     execute_python_tool,
     run_bg_tool,
@@ -48,9 +50,10 @@ class SessionConnection:
             self.app_state.llm,
         )
 
-        # 构建专属于此 Web 会话的 ToolRegistry
+        # 构建专属于此 Web 会话的 ToolRegistry（权限策略会话级隔离，支持实时切换模式）
+        self.permission_policy = PermissionPolicy(WORKSPACE_ROOT)
         self.registry = ToolRegistry(
-            PermissionPolicy(WORKSPACE_ROOT),
+            self.permission_policy,
             self.approval_mgr.request,
         )
         self.registry.register_many([
@@ -59,6 +62,8 @@ class SessionConnection:
             *FILE_TOOLS,
             *build_team_tools(self.team_manager),
             build_skill_tool(self.app_state.skill_loader),
+            *build_memory_tools(),
+            web_search_tool,
             run_bg_tool,
             check_bg_tool,
         ])
@@ -107,10 +112,7 @@ class SessionConnection:
         self._is_closed = True
         self.sender_task.cancel()
         # 兜底释放所有被挂起的审批等待，避免死锁后台工作线程
-        with self.approval_mgr._lock:
-            for req in self.approval_mgr._pending_requests.values():
-                req["decision"] = "n"
-                req["event"].set()
+        self.approval_mgr.cancel_all()
 
     def _on_token(self, token: str) -> None:
         self._send_json_threadsafe({
@@ -228,6 +230,20 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, app_state: A
                     conn.handle_approval_response(approval_id, decision)
             elif msg_type == "compact":
                 conn.handle_compact()
+            elif msg_type == "set_approval_mode":
+                mode_value = str(data.get("mode", "")).strip().lower()
+                mode = VALID_APPROVAL_MODES.get(mode_value)
+                if mode:
+                    conn.permission_policy.set_approval_mode(mode)
+                    conn._send_json_threadsafe({
+                        "type": "approval_mode_changed",
+                        "mode": mode.value,
+                    })
+                else:
+                    conn._send_json_threadsafe({
+                        "type": "error",
+                        "error": f"Unknown approval mode: {mode_value!r}",
+                    })
             elif msg_type == "get_history":
                 await conn.send_history()
     except WebSocketDisconnect:

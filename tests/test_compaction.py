@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from rove.messages import Message, ToolCall
 from rove.llm import LLMResponse, LLMRequest
-from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
+from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter, THINKING_FALLBACK_MARKER
 from rove.compaction.compaction_layers import (
     estimate_messages_tokens,
     tool_result_budget,
@@ -11,9 +11,11 @@ from rove.compaction.compaction_layers import (
     snip_compact,
     compact_history,
     run_pipeline,
+    _summarize_history,
     KEEP_RECENT,
     COMPACT_THRESHOLD,
     PERSIST_THRESHOLD,
+    MAX_SUMMARY_TOKENS,
 )
 
 
@@ -90,6 +92,27 @@ def test_online_self_calibration():
     dummy_llm._record_usage(response)
     # 比例进一步平滑收敛向 0.7~0.8 附近
     assert dummy_llm.cjk_token_ratio < 0.95
+
+
+def test_calibration_ignores_tool_call_responses():
+    """带 tool_use 的响应其 output_tokens 包含 JSON 结构开销，
+    不能参与 cjk_token_ratio 在线校准，否则比例被系统性抬高。"""
+    from rove.llm import Usage
+    dummy_llm = DummyLLM()
+    assert dummy_llm.cjk_token_ratio == 1.3
+
+    # 文本足够长（非 ASCII >= 20），但 output_tokens 严重虚高（含工具调用开销）
+    response = LLMResponse(
+        content="这段中文文本足够长，专门用于验证工具调用响应不会触发校准采样逻辑。" * 2,
+        tool_calls=[ToolCall(tool_id="t1", tool_name="bash", tool_args={"cmd": "ls"})],
+        model="test-model",
+        stop_reason="tool_use",
+        usage=Usage(input_tokens=1000, output_tokens=900),
+    )
+    dummy_llm._record_usage(response)
+
+    # 比例必须保持初始值，未被污染
+    assert dummy_llm.cjk_token_ratio == 1.3
 
 
 def test_user_anchor_preservation():
@@ -191,6 +214,62 @@ def test_l2_micro_compact_anti_loop_and_threshold():
         assert tool_msgs[i].content == f"Normal output {i}"
 
 
+def test_anchor_excludes_synthetic_system_messages():
+    """L1 锚点只保护真实用户指令：<reminder>/<inbox>/<background-results>
+    等系统注入的合成 user 消息不钉，随中段一起被剪除。"""
+    messages = [Message(role="user", content="启动任务")]
+    for i in range(1, 40):
+        if i == 10:
+            messages.append(Message(role="user", content="<reminder>Update your todos.</reminder>"))
+        elif i == 20:
+            messages.append(Message(role="user", content="<inbox>[]</inbox>"))
+        elif i == 30:
+            # 中段的真实用户需求必须保留
+            messages.append(Message(role="user", content="重要！需求变更：全部换成 SQLite"))
+        else:
+            messages.append(Message(
+                role="assistant",
+                content=f"step {i}",
+                tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="t", tool_args={})]
+            ))
+            messages.append(Message(role="tool", tool_call_id=f"c_{i}", content=f"out {i}"))
+
+    messages.append(Message(role="user", content="收尾"))
+    snipped = snip_compact(messages)
+
+    user_contents = [m.content for m in snipped if m.role == "user"]
+    assert any("需求变更：全部换成 SQLite" in c for c in user_contents), "真实用户指令必须钉住"
+    assert all("<reminder>" not in c for c in user_contents), "合成提醒不应被钉为锚点"
+    assert all("<inbox>" not in c for c in user_contents), "合成收件箱消息不应被钉为锚点"
+
+
+def test_l2_persists_oversized_old_results(tmp_path):
+    """L2 对滑出保留窗口的超长输出应落盘持久化并保留路径指针，
+    全文可回溯，且已持久化的消息不会被二度处理。"""
+    messages = [Message(role="user", content="分析日志")]
+    for i in range(12):
+        messages.append(Message(
+            role="assistant",
+            tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="read", tool_args={})]
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"c_{i}", content=f"LOG_DATA_{i}: " + "Z" * 6000))
+
+    compacted = micro_compact(messages, tmp_path)
+
+    old_msg = [m for m in compacted if m.tool_call_id == "c_0"][0]
+    assert "<persisted-output>" in old_msg.content
+
+    persist_file = tmp_path / "c_0.txt"
+    assert persist_file.exists()
+    assert "LOG_DATA_0" in persist_file.read_text(encoding="utf-8")
+    assert str(persist_file) in old_msg.content
+
+    # 再次触发 L2：已持久化的消息不再被二度处理
+    compacted_again = micro_compact(compacted, tmp_path)
+    again_msg = [m for m in compacted_again if m.tool_call_id == "c_0"][0]
+    assert again_msg.content == old_msg.content
+
+
 def test_persisted_output_protection(tmp_path):
     """测试已持久化的 <persisted-output> 永远不会被后续的 L2/L1 抹除路径"""
     # 模拟 L3 写入持久化输出
@@ -287,6 +366,70 @@ def test_adaptive_watermarks_1m_vs_200k():
     assert any("[Output truncated" in (m.content or "") for m in result_200k)
 
 
+def test_l4_summary_covers_head_and_tail():
+    """L4 摘要输入超预算时必须头尾采样：最初的用户目标与最新的中途约束
+    都必须进入摘要 prompt，而不是只截取开头 80k 字符。"""
+    recorded = {}
+
+    class RecordingLLM(DummyLLM):
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            recorded["prompt"] = request.messages[0].content
+            return super().complete(request)
+
+    llm = RecordingLLM()
+    messages = [Message(role="user", content="最早的需求：EARLY_GOAL_MARKER 排查内存泄漏")]
+    # 构造远超 80k 字符预算的中段历史（约 240 条 × 6k 字符）
+    for i in range(120):
+        messages.append(Message(role="assistant", content=f"step {i}: " + "x" * 3000))
+        messages.append(Message(role="tool", tool_call_id=f"t_{i}", content=f"data {i}: " + "y" * 3000))
+    messages.append(Message(role="user", content="最新的约束：LATE_CONSTRAINT_MARKER 只改缓存层"))
+
+    compact_history(llm, messages)
+
+    prompt = recorded["prompt"]
+    assert "EARLY_GOAL_MARKER" in prompt, "对话开头的原始目标必须进入摘要输入"
+    assert "LATE_CONSTRAINT_MARKER" in prompt, "对话末尾的最新约束必须进入摘要输入"
+    assert "中段过长已省略" in prompt
+
+
+def test_l4_summary_retries_on_thinking_fragment():
+    """L4 摘要在思考模型耗尽输出 Token、只产出思维链碎片时，
+    必须加倍预算重试一次，拿回真正的结构化摘要。"""
+    calls = []
+
+    class ThinkingLLM(DummyLLM):
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            calls.append(request.max_tokens)
+            if len(calls) == 1:
+                return LLMResponse(
+                    content=f"{THINKING_FALLBACK_MARKER}: 我们需要总结对话，先看用户目标……",
+                    tool_calls=[], model=self.model, stop_reason="max_tokens",
+                )
+            return LLMResponse(
+                content="1. 目标：排查内存泄漏\n2. 已读文件：app.py",
+                tool_calls=[], model=self.model, stop_reason="end_turn",
+            )
+
+    summary = _summarize_history(ThinkingLLM(), [Message(role="user", content="排查内存泄漏")])
+    assert "内存泄漏" in summary
+    assert calls == [MAX_SUMMARY_TOKENS, MAX_SUMMARY_TOKENS * 2]
+
+
+def test_l4_summary_retries_on_empty():
+    """摘要完全为空时同样加倍预算重试一次"""
+    calls = []
+
+    class EmptyThenGoodLLM(DummyLLM):
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            calls.append(request.max_tokens)
+            content = "" if len(calls) == 1 else "1. 目标：重构缓存层"
+            return LLMResponse(content=content, tool_calls=[], model=self.model, stop_reason="end_turn")
+
+    summary = _summarize_history(EmptyThenGoodLLM(), [Message(role="user", content="hi")])
+    assert "缓存层" in summary
+    assert calls == [MAX_SUMMARY_TOKENS, MAX_SUMMARY_TOKENS * 2]
+
+
 def test_l4_compact_history_retains_tail_memory():
     """测试 L4 深度摘要压缩时，保留尾部最近 5~8 条活跃交互，防止断崖式失忆"""
     dummy_llm = DummyLLM()
@@ -340,3 +483,114 @@ def test_run_pipeline_ordering(tmp_path):
     huge_msg = [m for m in processed if m.tool_call_id == "huge_call"][0]
     assert "<persisted-output>" in huge_msg.content
     assert "HUGE_DATA" in huge_msg.content
+
+
+# ---------------- 边界补充测试 ----------------
+def test_snip_boundary_exact_threshold():
+    """L1 门槛边界：恰好 60 条不剪，61 条才剪"""
+    from rove.compaction.compaction_layers import MAX_MESSAGES
+
+    def build(n):
+        msgs = [Message(role="user", content="开始")]
+        for i in range(n - 1):
+            # assistant 文本不是锚点，中段可被剪除
+            msgs.append(Message(role="assistant", content=f"推理消息 {i}"))
+        return msgs
+
+    at_limit = build(MAX_MESSAGES)
+    assert snip_compact(at_limit) == at_limit, "恰好达到阈值不应触发剪枝"
+
+    over_limit = build(MAX_MESSAGES + 1)
+    snipped = snip_compact(over_limit)
+    assert len(snipped) < len(over_limit)
+    assert any("[已压缩" in (m.content or "") for m in snipped)
+
+    # 锚点语义边界：全用户消息的会话里每条都是锚点，L1 无法缩减（设计使然）
+    all_user = [Message(role="user", content=f"用户消息 {i}") for i in range(MAX_MESSAGES + 1)]
+    assert len(snip_compact(all_user)) == len(all_user)
+
+
+def test_micro_compact_threshold_boundary(tmp_path):
+    """L2 阈值边界：恰好 4000 字符不处理，4001 才脱水并落盘"""
+    messages = [Message(role="user", content="x")]
+    for i, size in enumerate([COMPACT_THRESHOLD, COMPACT_THRESHOLD + 1] + [100] * 10):
+        messages.append(Message(
+            role="assistant",
+            tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="read", tool_args={})],
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"c_{i}", content=f"OUT_{i}: " + "Q" * (size - len(f"OUT_{i}: "))))
+
+    compacted = micro_compact(messages, tmp_path)
+    tool_msgs = [m for m in compacted if m.role == "tool"]
+
+    # 恰好等于阈值的完整保留（在 10 条保留窗口之外也不动）
+    assert tool_msgs[0].content.startswith("OUT_0:")
+    assert "<persisted-output>" not in tool_msgs[0].content
+    # 超一个字符即被落盘脱水
+    assert "<persisted-output>" in tool_msgs[1].content
+    assert (tmp_path / "c_1.txt").read_text(encoding="utf-8").startswith("OUT_1:")
+
+
+def test_build_summary_input_single_huge_message_fallback():
+    """单条消息即超预算的退化场景：硬截断兜底，输出非空且不超预算"""
+    from rove.compaction.compaction_layers import _build_summary_input, SUMMARY_CHAR_BUDGET
+
+    huge = Message(role="assistant", content="Z" * (SUMMARY_CHAR_BUDGET * 3))
+    out = _build_summary_input([huge])
+    assert 0 < len(out) <= SUMMARY_CHAR_BUDGET
+
+
+def test_run_pipeline_l2_fires_l1_skipped_when_few_messages():
+    """窗口 100k：~21k tokens 触发 L2（10% 水位），但消息数 ≤60 时 L1 必须跳过"""
+    messages = [Message(role="user", content="分析开始")]
+    for i in range(20):
+        messages.append(Message(
+            role="assistant",
+            tool_calls=[ToolCall(tool_id=f"c_{i}", tool_name="read", tool_args={})],
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"c_{i}", content="DATA " + "x" * 4800))
+    assert len(messages) == 41 <= 60
+
+    result = run_pipeline(DummyLLM(context_window=100_000), messages)
+    assert any("[Output truncated" in (m.content or "") for m in result), "L2 应已触发"
+    assert all("[已压缩" not in (m.content or "") for m in result), "L1 不应触发"
+
+
+def test_run_pipeline_l4_triggers_on_text_heavy_history():
+    """窗口 50k（L4 水位 20k）：纯文本长历史（L2 管不到）必须由 L4 摘要兜底"""
+    messages = [Message(role="user", content="目标：重构缓存层")]
+    for i in range(40):
+        messages.append(Message(role="assistant", content=f"step {i}: " + "y" * 3000))
+
+    result = run_pipeline(DummyLLM(context_window=50_000), messages)
+    assert "[对话已压缩]" in (result[0].content or ""), "L4 摘要必须触发"
+    # 尾部活跃消息保留
+    assert any("step 39" in (m.content or "") for m in result[1:])
+
+
+def test_reactive_compact_pair_integrity():
+    """应急压缩后 tool_use/tool_result 配对完整，adapter 转换角色严格交替"""
+    messages = [Message(role="user", content="排查问题")]
+    for i in range(30):
+        messages.append(Message(
+            role="assistant",
+            content=f"thinking {i}",
+            tool_calls=[ToolCall(tool_id=f"tc_{i}", tool_name="read", tool_args={})],
+        ))
+        messages.append(Message(role="tool", tool_call_id=f"tc_{i}", content=f"out {i}"))
+
+    from rove.compaction.compaction_layers import reactive_compact
+    compacted = reactive_compact(DummyLLM(), messages)
+    assert "[应急压缩]" in (compacted[0].content or "")
+
+    converted = AnthropicLLMAdapter._convert_messages(compacted)
+    for i in range(len(converted) - 1):
+        assert converted[i]["role"] != converted[i + 1]["role"], f"相邻同角色 at {i}"
+
+
+def test_estimate_tokens_counts_tool_call_args():
+    """全量估算路径（无 llm）：tool_calls 参数体积必须计入"""
+    small = [Message(role="assistant", tool_calls=[ToolCall(tool_id="t", tool_name="bash", tool_args={"command": "ls"})])]
+    big = [Message(role="assistant", tool_calls=[ToolCall(tool_id="t", tool_name="bash", tool_args={"command": "cat " + "f " * 3000})])]
+
+    assert estimate_messages_tokens(big) > estimate_messages_tokens(small) + 500

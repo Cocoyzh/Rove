@@ -141,6 +141,7 @@ class CommandClassifier:
         "-okdir",
         "-fprint",
         "-fprint0",
+        "-fprintf",
         "-fls",
     }
 
@@ -190,6 +191,16 @@ class CommandClassifier:
         if "${" in cmd:
             return False, "Shell parameter expansion (${...}) detected"
 
+        # Bare $VAR (e.g. $HOME) also expands at runtime and its value is
+        # unknowable statically, so it bypasses every path/sensitive check below
+        if "$" in cmd:
+            return False, "Shell variable expansion ($VAR) is not allowed in read-only commands"
+
+        # shlex treats raw newlines as whitespace, so everything after a newline
+        # would be merged into the first sub-command and bypass chain-splitting
+        if "\n" in cmd or "\r" in cmd:
+            return False, "Multi-line commands are not auto-approved (newline may hide extra commands)"
+
         # Tokenize with punctuation support
         try:
             lexer = shlex.shlex(cmd, punctuation_chars=True)
@@ -213,14 +224,19 @@ class CommandClassifier:
 
         for token in tokens:
             if token in chain_operators:
-                if current_sub_cmd:
-                    sub_commands.append(current_sub_cmd)
-                    current_sub_cmd = []
+                # 残缺命令（'| cat'、';;'）无法静态判定首段，一律拒绝
+                if not current_sub_cmd:
+                    return False, "Empty sub-command around chain operator"
+                sub_commands.append(current_sub_cmd)
+                current_sub_cmd = []
             else:
                 current_sub_cmd.append(token)
 
         if current_sub_cmd:
             sub_commands.append(current_sub_cmd)
+        elif sub_commands:
+            # 以链式操作符结尾（如 'cat a &&'）同样是残缺命令
+            return False, "Trailing chain operator with no command"
 
         if not sub_commands:
             return False, "No executable sub-commands found"
@@ -259,6 +275,69 @@ class CommandClassifier:
             i += 1
 
         return True, ""
+
+    def find_workspace_escape(self, command: str) -> str | None:
+        """返回命令中第一个逃出工作区的路径参数（不逃逸返回 None）。
+
+        与 classify() 的白名单无关，供权限策略对所有 bash 命令（含非只读）
+        做工作区边界硬检查：以 / 或 ~ 开头、或含 .. 的参数都会解析比对，
+        逃逸即返回该 token。无法分词时保守返回占位串以触发拒绝。
+        """
+        if not isinstance(command, str) or not command.strip():
+            return None
+
+        try:
+            lexer = shlex.shlex(command.strip(), punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            return "<unparsable command>"
+
+        for token in tokens:
+            if token.startswith("-"):
+                continue
+            clean = token.strip("\"'")
+            if not clean:
+                continue
+            is_within, _ = self._check_path_bounds(clean)
+            if not is_within:
+                return token
+        return None
+
+    def is_workspace_redirection(self, command: str) -> bool:
+        """判断命令的输出重定向是否全部落在工作区内。
+
+        供 WORKSPACE 权限模式使用：仅当命令确实包含文件重定向、且不含
+        动态展开/换行、每个重定向目标都可解析为工作区内路径时返回 True。
+        """
+        if not isinstance(command, str):
+            return False
+        cmd = command.strip()
+        if not cmd:
+            return False
+        # 与 classify() 同源的防注入前置检查：动态内容无法静态判定目标
+        if any(marker in cmd for marker in ("$", "`", "\n", "\r")):
+            return False
+
+        try:
+            lexer = shlex.shlex(cmd, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            return False
+
+        found_redirect = False
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if token in {">", ">>", ">|", "&>"} and i + 1 < len(tokens):
+                if not self._check_path_bounds(tokens[i + 1])[0]:
+                    return False
+                found_redirect = True
+                i += 2
+                continue
+            i += 1
+        return found_redirect
 
     def _validate_sub_command(self, tokens: list[str]) -> tuple[bool, str]:
         if not tokens:

@@ -48,7 +48,8 @@ class PathRule(ApprovalRule):
         if not isinstance(path_str, str):
             return ""
         try:
-            return Path(path_str).as_posix().lstrip("./")
+            # Path 已折叠 ./ 组件；不能按字符集 lstrip，否则 ".env" 会被剥成 "env"
+            return Path(path_str).as_posix()
         except ValueError:
             return path_str.strip()
 

@@ -129,3 +129,16 @@ class WebApprovalManager:
             req["decision"] = decision.strip().lower()
             req["event"].set()
             return True
+
+    def cancel_all(self, decision: str = "n") -> int:
+        """以给定决策唤醒并取消当前所有挂起的审批请求（如会话关闭时）。
+
+        返回取消的请求数量；各等待线程随后按既有流程弹出并返回。
+        """
+        with self._lock:
+            for req in self._pending_requests.values():
+                req["decision"] = decision
+                req["event"].set()
+            cancelled = len(self._pending_requests)
+            self._pending_requests.clear()
+            return cancelled

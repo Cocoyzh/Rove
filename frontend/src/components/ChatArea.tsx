@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft } from 'lucide-react';
-import { ChatMessage, ToolStep, ApprovalRequest } from '../types/rove';
+import { Send, Loader2, Sparkles, Sidebar as SidebarIcon, PanelLeft, ShieldCheck } from 'lucide-react';
+import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode, APPROVAL_MODE_LABELS } from '../types/rove';
 import { MessageItem } from './MessageItem';
 import { groupMessagesIntoTurns } from '../utils/turnGrouper';
 
@@ -13,8 +13,10 @@ interface ChatAreaProps {
   activeToolSteps: ToolStep[];
   pendingApproval: ApprovalRequest | null;
   isRunning: boolean;
+  approvalMode: ApprovalMode;
   onSendMessage: (query: string) => void;
   onSendApproval: (approvalId: string, decision: string) => void;
+  onChangeApprovalMode: (mode: ApprovalMode) => void;
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   isCollabOpen: boolean;
@@ -31,8 +33,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   activeToolSteps,
   pendingApproval,
   isRunning,
+  approvalMode,
   onSendMessage,
   onSendApproval,
+  onChangeApprovalMode,
   isSidebarCollapsed,
   onToggleSidebar,
   isCollabOpen,
@@ -118,19 +122,39 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* 右侧协同面板切换按钮 */}
-        <button
-          onClick={onToggleCollab}
-          className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center space-x-1.5 transition-all ${
-            isCollabOpen
-              ? 'bg-sky-50 border-sky-200 text-sky-700 shadow-xs'
-              : 'border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-900'
-          }`}
-          title="切换协同看板"
-        >
-          <SidebarIcon size={14} />
-          <span className="hidden sm:inline">协同看板</span>
-        </button>
+        {/* 右侧：权限模式切换 + 协同面板切换 */}
+        <div className="flex items-center space-x-2">
+          <div
+            className="flex items-center space-x-1.5 border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-slate-600"
+            title="权限审批模式：严格审查逐条审批；工作区信任自动放行区内写入；完全访问仅保留硬拒绝底线"
+          >
+            <ShieldCheck size={14} className="text-slate-400" />
+            <select
+              value={approvalMode}
+              onChange={(e) => onChangeApprovalMode(e.target.value as ApprovalMode)}
+              className="bg-transparent outline-none cursor-pointer font-medium text-slate-700"
+            >
+              {(Object.keys(APPROVAL_MODE_LABELS) as ApprovalMode[]).map((mode) => (
+                <option key={mode} value={mode}>
+                  {APPROVAL_MODE_LABELS[mode]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={onToggleCollab}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center space-x-1.5 transition-all ${
+              isCollabOpen
+                ? 'bg-sky-50 border-sky-200 text-sky-700 shadow-xs'
+                : 'border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-900'
+            }`}
+            title="切换协同看板"
+          >
+            <SidebarIcon size={14} />
+            <span className="hidden sm:inline">协同看板</span>
+          </button>
+        </div>
       </header>
 
       {/* 对话消息滚动区 */}

@@ -19,6 +19,11 @@ class ToolRegistry:
         self._permission_policy = permission_policy
         self._approval_handler = approval_handler
 
+    @property
+    def permission_policy(self) -> PermissionPolicy:
+        """暴露策略实例，供 CLI / Web 运行时切换权限审批模式。"""
+        return self._permission_policy
+
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
             raise ValueError(f"Tool {tool.name} already registered")

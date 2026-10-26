@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { ChatMessage, ToolStep, ApprovalRequest } from '../types/rove';
+import { ChatMessage, ToolStep, ApprovalRequest, ApprovalMode } from '../types/rove';
 
 interface UseRoveWebSocketOptions {
   sessionId: string | null;
@@ -13,6 +13,7 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
   const [activeToolSteps, setActiveToolSteps] = useState<ToolStep[]>([]);
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>('workspace');
 
   const wsRef = useRef<WebSocket | null>(null);
   const pendingQueryRef = useRef<string | null>(null);
@@ -118,6 +119,10 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
                 target_path: data.target_path,
                 available_choices: data.available_choices,
               });
+              break;
+
+            case 'approval_mode_changed':
+              setApprovalMode(data.mode as ApprovalMode);
               break;
 
             case 'error':
@@ -230,6 +235,14 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     return true;
   }, []);
 
+  const changeApprovalMode = useCallback((mode: ApprovalMode) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    wsRef.current.send(JSON.stringify({ type: 'set_approval_mode', mode }));
+    return true;
+  }, []);
+
   const queueInitialMessage = useCallback((query: string) => {
     pendingQueryRef.current = query;
   }, []);
@@ -241,9 +254,11 @@ export function useRoveWebSocket({ sessionId, onSessionUpdated }: UseRoveWebSock
     activeToolSteps,
     pendingApproval,
     isRunning,
+    approvalMode,
     sendMessage,
     sendApproval,
     sendCompact,
+    changeApprovalMode,
     queueInitialMessage,
   };
 }

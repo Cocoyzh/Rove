@@ -11,6 +11,10 @@ CONTEXT_WINDOWS = {
 }
 DEFAULT_CONTEXT_WINDOW = 1_000_000
 
+# 思考模型耗尽输出 Token 时的兜底文本前缀（_build_response），
+# 供下游（如 L4 摘要）识别"拿到的是思维链碎片而非正式产出"
+THINKING_FALLBACK_MARKER = "*(思考中已达Token上限)*"
+
 class BaseLLMAdapter(ABC):
     def __init__(self, model: str, api_key: str, base_url: Optional[str], timeout: Optional[int],
                  context_window: Optional[int] = None):
@@ -37,7 +41,9 @@ class BaseLLMAdapter(ABC):
 
             content = response.content or ""
             c_len = len(content)
-            if c_len > 0 and response.usage.output_tokens > 0:
+            # 校准仅取纯文本响应：tool_use 的 JSON 结构开销与思考 token
+            # 同样计入 output_tokens，混入会把 observed 比例系统性抬高
+            if c_len > 0 and not response.tool_calls and response.usage.output_tokens > 0:
                 b_len = len(content.encode("utf-8", errors="ignore"))
                 non_ascii = (b_len - c_len) // 2
                 if non_ascii >= 20:
@@ -133,7 +139,7 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
             # 兼容仅有思考块或耗尽输出 Token 的场景
             for block in message.content:
                 if getattr(block, "type", "") == "thinking" and getattr(block, "thinking", ""):
-                    text = f"*(思考中已达Token上限)*: {block.thinking[:200]}..."
+                    text = f"{THINKING_FALLBACK_MARKER}: {block.thinking[:200]}..."
                     break
         usage = None
         if hasattr(message, "usage"):

@@ -3,7 +3,7 @@ from rove.tools.tools_setup import build_default_registry
 from rove.skill_loader import SkillLoader
 from rove.task_manager import TaskManager
 from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR
-from rove.permissions import APPROVAL_MANAGER
+from rove.permissions import APPROVAL_MANAGER, VALID_APPROVAL_MODES
 from rove.tools.agent_teams import TeammateManger
 from rich.console import Console
 from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
@@ -93,6 +93,21 @@ def main() -> None:
             continue
         if query.strip() == "/context":
             show_context(lead, llm)
+            continue
+        if query.strip() == "/mode" or query.strip().startswith("/mode "):
+            policy = registry.permission_policy
+            parts = query.strip().split(maxsplit=1)
+            if len(parts) == 1:
+                console.print(f"[cyan]当前权限模式[/cyan] {policy.approval_mode.value} "
+                              f"[dim](可选: strict / workspace / full_access)[/dim]")
+                continue
+            mode_value = parts[1].strip().lower()
+            mode = VALID_APPROVAL_MODES.get(mode_value)
+            if mode is None:
+                console.print(f"[red]未知模式 {mode_value!r}[/red] [dim](可选: strict / workspace / full_access)[/dim]")
+                continue
+            policy.set_approval_mode(mode)
+            console.print(f"[cyan]✦ 权限模式已切换[/cyan] {mode.value}")
             continue
         answer = lead.run(query)
         if not (answer and answer.strip()):

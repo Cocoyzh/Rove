@@ -1,10 +1,23 @@
+import platform
+
 from rove.skill_loader import SkillLoader
-from rove.paths import SKILL_DIR
+from rove.paths import SKILL_DIR, WORKSPACE_ROOT, AGENT_TMP_DIR
 
 skill_loader = SkillLoader(SKILL_DIR)
+
+# 环境声明（Issue #9）：显式告知真实宿主环境，消除容器路径幻觉
+ENVIRONMENT_PROMPT = f"""Environment:
+- Host OS: {platform.system()} {platform.release()} ({platform.machine()}). This is the user's real machine, NOT a container.
+- Workspace root (absolute): {WORKSPACE_ROOT}
+- All file tool paths resolve relative to the workspace root. Container-style paths like /workspace do NOT exist.
+- Use {AGENT_TMP_DIR} for any temporary/scratch files. Do NOT write to the host /tmp.
+- Bash commands whose arguments reach outside the workspace root are hard-denied by the permission layer.
+
+"""
+
 SYSTEM_PROMPT = f"""You are Rove, an extensible coding agent harness. Your goal is to understand, modify, and verify code in a repository.
 
-Workflow:
+{ENVIRONMENT_PROMPT}Workflow:
 1. Plan — Use todo to break down multi-step work and track progress.
 2. Explore — Read files, search code, or run shell commands to understand the current state.
 3. Modify — Edit or write files to make changes.
@@ -18,6 +31,12 @@ Rules:
 - Verify your changes — don't assume they work.
 - Prefer targeted edits over full file rewrites.
 - Stop once all tests pass and the task is complete.
+
+Memory:
+- A <working-memory> block and a <long-term-memory> block are injected into your system prompt each turn. They live OUTSIDE the conversation history and survive compaction — treat them as your source of truth.
+- Use memory_update to keep the blackboard current: set goal when the task is clear, append finding after each verified conclusion, mark file as you focus on it, and put unresolved questions in note (scratchpad).
+- Use memory_store to persist durable knowledge for future sessions: project conventions and test commands (semantic), root causes and fixes you verified (episodic), user preferences (preference).
+- Use memory_recall when you suspect a past session already explored this problem — it is cheaper than re-exploring.
 
 Team:
 - Use spawn_teammate to create autonomous workers. Give them a clear role, not step-by-step instructions. Do NOT tell them to "wait for instructions" — they find work themselves.

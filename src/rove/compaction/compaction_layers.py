@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 from rich.console import Console
-from rove.llm_adapters import BaseLLMAdapter
+from rove.llm_adapters import BaseLLMAdapter, THINKING_FALLBACK_MARKER
 from rove.llm import LLMResponse, LLMRequest
 from rove.messages import Message
 from rove.paths import TOOL_RESULTS_DIR, TRANSCRIPT_DIR
@@ -31,22 +31,25 @@ PREVIEW_CHARS = 3_000
 
 # L4: Auto Compact
 CONTEXT_LIMIT = 50_000
-MAX_SUMMARY_TOKENS = 2_000
+MAX_SUMMARY_TOKENS = 8_000
 
 # Watermarks
 L2_WATERMARK_RATIO = 0.10
 L1_WATERMARK_RATIO = 0.20
 L4_WATERMARK_RATIO = 0.40
 
+# L4 摘要输入预算（字符）：适配 1M 上下文模型，允许上传约 8~10 万 Token 的对话材料
+SUMMARY_CHAR_BUDGET = 300_000
+
 # L4 摘要提示词
-SUMMARY_PROMPT = """请总结以下对话，保留关键信息：
-1. 用户的目标（分析、编码、调试等）
-2. 关键发现或决策（含具体数值、文件路径、代码结果）
-3. 已读取或修改的文件
+SUMMARY_PROMPT = """请总结以下对话。直接输出下面这份结构化事实清单，不要输出任何思考过程或铺垫：
+1. 用户的目标（分析、编码、调试等）与验收标准
+2. 关键发现或决策（必须含具体数值、文件路径、代码结果）
+3. 已读取或修改的文件清单
 4. 未完成的工作
 5. 用户的约束条件与中途指令变更
 
-要求：简洁、保留具体细节（数值、行号、列名、错误信息、需求演进）、不要复述工具调用过程。
+要求：每条都是可独立理解的事实句，保留具体细节（数值、行号、列名、错误信息、需求演进），不要复述工具调用过程。
 
 对话内容：
 {conversation}"""
@@ -164,8 +167,12 @@ def tool_result_budget(messages: list[Message], tool_results_dir: Path) -> list[
 
 
 # ---------------- L2 -------------------
-def micro_compact(messages: list[Message]) -> list[Message]:
-    """L2: 压缩较早轮次的超长工具输出。"""
+def micro_compact(messages: list[Message], tool_results_dir: Path | None = None) -> list[Message]:
+    """L2: 压缩较早轮次的超长工具输出。
+
+    提供 tool_results_dir 时把完整输出落盘并在消息中保留路径指针，
+    避免纯截断导致内容不可回溯；未提供时退化为首尾切片。
+    """
     tool_results = [msg for msg in messages if msg.role == "tool"]
     if len(tool_results) <= KEEP_RECENT:
         return messages
@@ -179,24 +186,51 @@ def micro_compact(messages: list[Message]) -> list[Message]:
             head = content[:500]
             tail = content[-500:]
             omitted = len(content) - 1000
-            msg.content = (
-                f"{head}\n"
-                f"\n... [Output truncated ({omitted} chars omitted). Use read_file with line ranges or grep if specific sections needed] ...\n\n"
-                f"{tail}"
-            )
+
+            persist_path: Path | None = None
+            if tool_results_dir is not None:
+                tool_results_dir.mkdir(parents=True, exist_ok=True)
+                persist_path = tool_results_dir / f"{msg.tool_call_id or f'l2_{id(msg)}'}.txt"
+                if not persist_path.exists():
+                    persist_path.write_text(content, encoding="utf-8")
+
+            if persist_path is not None:
+                msg.content = (
+                    f"<persisted-output>\n"
+                    f"Full output path : {str(persist_path)}\n"
+                    f"Total size : {len(content)} 字符\n"
+                    f"Preview :\n{head}\n"
+                    f"\n... [Output truncated ({omitted} chars omitted). Full output saved to disk; use read_file with line ranges to inspect specific sections] ...\n\n"
+                    f"{tail}\n"
+                    f"</persisted-output>"
+                )
+            else:
+                msg.content = (
+                    f"{head}\n"
+                    f"\n... [Output truncated ({omitted} chars omitted). Use read_file with line ranges or grep if specific sections needed] ...\n\n"
+                    f"{tail}"
+                )
             truncated += 1
 
     if truncated:
-        console.print(f"[bold yellow]⚠ L2 micro: 截断了 {truncated} 条旧工具结果[/bold yellow]")
+        console.print(f"[bold yellow]⚠ L2 micro: 脱水了 {truncated} 条旧工具结果[/bold yellow]")
     return messages
 
 
 # ---------------- L1 -------------------
+# 不参与锚点保护的前缀：压缩占位/摘要 + 系统注入的合成 user 消息
+ANCHOR_EXCLUDED_PREFIXES = (
+    "[已压缩", "[对话已压缩]", "[应急压缩]",
+    "<reminder>", "<inbox>", "<background-results>",
+)
+
+
 def _is_user_anchor(msg: Message) -> bool:
+    """真实用户指令享有免剪锚点保护；压缩占位符与系统注入的合成消息不钉。"""
     if msg.role != "user" or not msg.content:
         return False
     text = msg.content.strip()
-    return not text.startswith(("[已压缩", "[对话已压缩]", "[应急压缩]"))
+    return not text.startswith(ANCHOR_EXCLUDED_PREFIXES)
 
 
 def snip_compact(messages: list[Message]) -> list[Message]:
@@ -269,28 +303,85 @@ def _write_transcript(messages: list[Message]) -> Path:
     return path
 
 
+def _build_summary_input(messages: list[Message], budget: int = SUMMARY_CHAR_BUDGET) -> str:
+    """构建 L4 摘要输入：预算内整条消息拼接；超预算时对半保留头尾消息、
+    中段整条省略，保证摘要同时覆盖最初目标与近期进展，而不是只看到对话开头。"""
+    dumped = [json.dumps(m.to_dict(), default=str, ensure_ascii=False) for m in messages]
+    if sum(len(s) for s in dumped) <= budget:
+        return "\n".join(dumped)
+
+    half = budget // 2
+    head: list[str] = []
+    head_size = 0
+    for s in dumped:
+        if head_size + len(s) > half:
+            break
+        head.append(s)
+        head_size += len(s)
+
+    tail: list[str] = []
+    tail_size = 0
+    for s in reversed(dumped):
+        if tail_size + len(s) > half:
+            break
+        tail.append(s)
+        tail_size += len(s)
+    tail.reverse()
+
+    # 单条消息就超出预算的退化场景：回退为硬截断，保证摘要输入非空
+    if not head and not tail:
+        return "\n".join(dumped)[:budget]
+
+    omitted = len(dumped) - len(head) - len(tail)
+    return "\n".join([*head, f"...[中段过长已省略 {omitted} 条消息，完整内容见 transcript 存档]...", *tail])
+
+
+def _is_thinking_fragment(text: str) -> bool:
+    """识别 _build_response 的思考兜底文本：思考模型耗尽输出 Token 时，
+    拿到的是思维链碎片而非正式产出。"""
+    return THINKING_FALLBACK_MARKER in text
+
+
 def _summarize_history(llm: BaseLLMAdapter, messages: list[Message]) -> str:
-    """调 LLM 对对话历史做摘要，保留目标、发现、约束。"""
-    conversation = json.dumps([m.to_dict() for m in messages],
-                              default=str, ensure_ascii=False)[:80000]
+    """调 LLM 对对话历史做摘要，保留目标、发现、约束。
+
+    思考模型可能把 max_tokens 全部耗在 thinking 上，导致摘要为空或
+    只剩思维链碎片；此时加倍预算重试一次，保证摘要可用。
+    """
+    conversation = _build_summary_input(messages)
     prompt = SUMMARY_PROMPT.format(conversation=conversation)
 
-    request = LLMRequest(messages=[Message(role="user", content=prompt)], tools=[],
-                         max_tokens=MAX_SUMMARY_TOKENS)
-    response: LLMResponse = llm.complete(request)
+    max_tokens = MAX_SUMMARY_TOKENS
+    summary = ""
+    for _ in range(2):
+        request = LLMRequest(messages=[Message(role="user", content=prompt)], tools=[],
+                             max_tokens=max_tokens)
+        response: LLMResponse = llm.complete(request)
+        summary = (response.content or "").strip()
+        if summary and not _is_thinking_fragment(summary):
+            return summary
+        max_tokens *= 2
 
-    return response.content or "(摘要为空)"
+    return summary or "(摘要为空)"
 
 
-def compact_history(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
-    """L4: 前三层压不下去时，调 LLM 做全量摘要并保留近期尾部消息。"""
+def compact_history(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) -> list[Message]:
+    """L4: 前三层压不下去时，调 LLM 做全量摘要并保留近期尾部消息。
+
+    on_summary(summary)：摘要产出回调（如沉淀进长期记忆），由调用方注入。
+    """
     transcript_path = _write_transcript(messages)
     console.print(f"[bold yellow]⚠ L4 压缩: 对话已存档[/bold yellow] [dim]{transcript_path}[/dim]")
 
     summary = _summarize_history(llm, messages)
     console.print(f"[bold yellow]⚠ L4 压缩: 摘要完成[/bold yellow] [dim]{len(summary)} 字符[/dim]")
+    if on_summary:
+        try:
+            on_summary(summary)
+        except Exception as e:
+            console.print(f"[yellow]⚠ L4 摘要回调失败: {e}[/yellow]")
 
-    tail_count = min(6, len(messages))
+    tail_count = min(10, len(messages))
     tail_start = max(0, len(messages) - tail_count)
     if 0 < tail_start < len(messages) and messages[tail_start].role == "tool":
         while tail_start > 0 and messages[tail_start - 1].role == "tool":
@@ -302,12 +393,17 @@ def compact_history(llm: BaseLLMAdapter, messages: list[Message]) -> list[Messag
     return [summary_msg, *messages[tail_start:]]
 
 
-def reactive_compact(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
+def reactive_compact(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) -> list[Message]:
     """应急压缩：API 返回 prompt_too_long 时的最后手段。"""
     transcript_path = _write_transcript(messages)
     console.print(f"[bold yellow]⚠ 应急压缩: 对话已存档[/bold yellow] [dim]{transcript_path}[/dim]")
 
     summary = _summarize_history(llm, messages)
+    if on_summary:
+        try:
+            on_summary(summary)
+        except Exception as e:
+            console.print(f"[yellow]⚠ 应急压缩摘要回调失败: {e}[/yellow]")
 
     tail_start = max(0, len(messages) - 5)
     if 0 < tail_start < len(messages) and messages[tail_start].role == "tool":
@@ -326,9 +422,9 @@ def reactive_compact(llm: BaseLLMAdapter, messages: list[Message]) -> list[Messa
 MAX_REACTIVE_RETRIES = 1
 
 
-def run_pipeline(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
+def run_pipeline(llm: BaseLLMAdapter, messages: list[Message], on_summary=None) -> list[Message]:
     """压缩流水线入口：L3 → L2 → L1 → L4。
-    在每轮 LLM 调用前调用，原地修改 messages。
+    在每轮 LLM 调用前调用，原地修改 messages；on_summary 透传给 L4/应急压缩。
     """
     context_window = getattr(llm, "context_window", 1_000_000)
 
@@ -338,7 +434,7 @@ def run_pipeline(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
 
     l2_limit = int(context_window * L2_WATERMARK_RATIO)
     if current_tokens >= l2_limit:
-        messages[:] = micro_compact(messages)
+        messages[:] = micro_compact(messages, TOOL_RESULTS_DIR)
         current_tokens = estimate_messages_tokens(messages)
 
     l1_limit = int(context_window * L1_WATERMARK_RATIO)
@@ -349,6 +445,6 @@ def run_pipeline(llm: BaseLLMAdapter, messages: list[Message]) -> list[Message]:
     l4_limit = int(context_window * L4_WATERMARK_RATIO)
     if current_tokens > l4_limit:
         console.print("[bold yellow]⚠ 上下文超标，触发 L4 摘要[/bold yellow]")
-        messages[:] = compact_history(llm, messages)
+        messages[:] = compact_history(llm, messages, on_summary=on_summary)
 
     return messages
