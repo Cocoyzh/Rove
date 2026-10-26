@@ -135,6 +135,7 @@ class PermissionPolicy:
 
     _ALLOWED_TOOLS = {
         "read_file",
+        "read_notebook",
         "load_skill",
         "todo",
         "task_create",

@@ -3,7 +3,7 @@ import time
 from typing import List
 from rich.console import Console
 from rove.tool_registry import ToolRegistry
-from rove.prompt.system_prompt import SYSTEM_PROMPT
+from rove.prompt.system_prompt import SYSTEM_PROMPT, TEAM_PROMPT
 from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES, compact_history
 from rove.memory import MEMORY
 from rove.tools.message_bus import BUS
@@ -20,12 +20,13 @@ def _store_l4_summary(summary: str) -> None:
     MEMORY.long_term.store("episodic", f"summary_{int(time.time())}", summary[:2000])
 
 
-def _build_system_prompt(query: str) -> str:
-    """System Prompt = 核心指令 + 记忆块（工作记忆 + 长期记忆检索）。"""
+def _build_system_prompt(query: str, team: bool = False) -> str:
+    """System Prompt = 核心指令（+ 团队段）+ 记忆块（工作记忆 + 长期记忆检索）。"""
+    prompt = f"{SYSTEM_PROMPT}\n{TEAM_PROMPT}" if team else SYSTEM_PROMPT
     memory_block = MEMORY.build_system_context(query)
     if memory_block:
-        return f"{SYSTEM_PROMPT}\n\n{memory_block}"
-    return SYSTEM_PROMPT
+        return f"{prompt}\n\n{memory_block}"
+    return prompt
 
 
 class LeadAgent:
@@ -35,6 +36,7 @@ class LeadAgent:
         self.max_steps = max_steps
         self.messages: List[Message] = []
         self.tools = registry.get_schemas()
+        self.team = any(t["name"] == "spawn_teammate" for t in self.tools)
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
 
@@ -91,7 +93,7 @@ class LeadAgent:
                 try:
                     request = LLMRequest(messages=self.messages, tools=self.tools,
                                          max_tokens=8000,
-                                         system_prompt=_build_system_prompt(query if step == 0 else ""))
+                                         system_prompt=_build_system_prompt(query if step == 0 else "", self.team))
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     if response.content:
                         console.print()

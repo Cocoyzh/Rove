@@ -7,10 +7,6 @@ from rove.tools.subagent import SubagentManager
 from test_subagent import FakeLLM, final_response
 
 
-def deny_all(tool_name, arguments, reason) -> bool:
-    return False
-
-
 class FakeFactory:
     """按 id 产出现成的 FakeLLM，并记录取用轨迹。"""
 
@@ -62,7 +58,7 @@ def test_estimate_cost_usd_per_model():
 def test_report_usage_footer_contains_cost(tmp_path):
     llm = FakeLLM([final_response("## 结论摘要\nok\n\n## 关键文件与证据\n- x\n\n## 遇到的障碍\n无",
                                   usage=(1000, 500))])
-    mgr = SubagentManager(llm, results_dir=tmp_path, approval_handler=deny_all)
+    mgr = SubagentManager(llm, results_dir=tmp_path)
     report = mgr.dispatch(objective="o", context="c")
     assert "cost_usd=" in report
     # fake-main 未知模型走默认计价：(1000*3 + 500*15) / 1e6 = 0.0105
@@ -74,7 +70,7 @@ def test_report_usage_footer_contains_cost(tmp_path):
 def test_dispatch_without_fast_model_uses_lead_adapter(tmp_path):
     llm = FakeLLM([final_response("主模型报告", usage=(10, 10))])
     factory = FakeFactory()
-    mgr = SubagentManager(llm, results_dir=tmp_path, approval_handler=deny_all,
+    mgr = SubagentManager(llm, results_dir=tmp_path,
                           fast_model_id=None, adapter_factory=factory)
 
     report = mgr.dispatch(objective="o", context="c")
@@ -87,7 +83,7 @@ def test_dispatch_without_fast_model_uses_lead_adapter(tmp_path):
 def test_dispatch_defaults_to_fast_model_when_configured(tmp_path):
     lead_llm = FakeLLM()  # lead 适配器不应被消耗
     factory = FakeFactory()
-    mgr = SubagentManager(lead_llm, results_dir=tmp_path, approval_handler=deny_all,
+    mgr = SubagentManager(lead_llm, results_dir=tmp_path,
                           fast_model_id="cheap-x", adapter_factory=factory)
 
     report = mgr.dispatch(objective="o", context="c")
@@ -100,7 +96,7 @@ def test_dispatch_defaults_to_fast_model_when_configured(tmp_path):
 def test_dispatch_model_fast_alias_routes_to_fast(tmp_path):
     lead_llm = FakeLLM()
     factory = FakeFactory()
-    mgr = SubagentManager(lead_llm, results_dir=tmp_path, approval_handler=deny_all,
+    mgr = SubagentManager(lead_llm, results_dir=tmp_path,
                           fast_model_id="cheap-x", adapter_factory=factory)
 
     report = mgr.dispatch(objective="o", context="c", model="fast")
@@ -111,7 +107,7 @@ def test_dispatch_model_fast_alias_routes_to_fast(tmp_path):
 
 def test_dispatch_explicit_model_id_uses_factory_cache(tmp_path):
     factory = FakeFactory()
-    mgr = SubagentManager(FakeLLM(), results_dir=tmp_path, approval_handler=deny_all,
+    mgr = SubagentManager(FakeLLM(), results_dir=tmp_path,
                           fast_model_id=None, adapter_factory=factory)
 
     mgr.dispatch(objective="o", context="c", model="model-b")
@@ -125,7 +121,7 @@ def test_dispatch_explicit_model_id_uses_factory_cache(tmp_path):
 def test_dispatch_model_fast_without_config_falls_back_to_lead(tmp_path):
     llm = FakeLLM([final_response("回落主模型", usage=(10, 10))])
     factory = FakeFactory()
-    mgr = SubagentManager(llm, results_dir=tmp_path, approval_handler=deny_all,
+    mgr = SubagentManager(llm, results_dir=tmp_path,
                           fast_model_id=None, adapter_factory=factory)
 
     report = mgr.dispatch(objective="o", context="c", model="fast")
