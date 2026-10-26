@@ -332,7 +332,7 @@ def test_progress_heartbeat_written_to_lead_inbox(tmp_path):
     assert "read_file" in progress[0]["content"]
 
 
-def test_subagent_events_emitted_for_frontend(tmp_path):
+def test_subagent_events_emitted(tmp_path):
     llm = FakeLLM([
         tool_use_response("t1", "read_file", {"path": "pyproject.toml"}, usage=(10, 10)),
         final_response("done", usage=(30, 20)),

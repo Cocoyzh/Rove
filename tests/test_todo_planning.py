@@ -141,35 +141,3 @@ def test_lead_agent_reminder_backoff_end_to_end(tmp_path):
     # 第 1,2,3 轮未触发，第 4 轮触发一次并进入 6 轮冷却；第 5 轮在冷却期内未触发
     assert len(reminders) == 1
     assert "If your plan has evolved" in reminders[0]
-
-
-def test_web_session_todo_syncs_to_api_tasks():
-    from starlette.testclient import TestClient
-    from rove.web.app import app
-    from rove.paths import TASK_DIR
-
-    client = TestClient(app)
-    res = client.post("/api/sessions", json={"title": "测试看板同步"})
-    assert res.status_code == 200
-    sid = res.json()["id"]
-
-    try:
-        session_tm = TaskManager(TASK_DIR / sid)
-        todo = TodoManager(task_manager=session_tm)
-        todo.update([
-            {"id": "1", "text": "解析数据", "status": "completed"},
-            {"id": "2", "text": "训练模型", "status": "in_progress"},
-        ])
-
-        tasks_res = client.get(f"/api/tasks?session_id={sid}")
-        assert tasks_res.status_code == 200
-        tasks = tasks_res.json()
-        assert len(tasks) == 2
-        assert tasks[0]["subject"] == "解析数据"
-        assert tasks[0]["status"] == "completed"
-        assert tasks[1]["subject"] == "训练模型"
-        assert tasks[1]["status"] == "in_progress"
-    finally:
-        client.delete(f"/api/sessions/{sid}")
-
-
