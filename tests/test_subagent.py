@@ -21,11 +21,6 @@ from rove.tools.subagent import (
 WORKSPACE = Path(__file__).parent.parent.resolve()
 
 
-def deny_all(tool_name, arguments, reason) -> bool:
-    """测试用审批兜底：意外触发 ASK 时直接拒绝，避免单测阻塞在交互输入。"""
-    return False
-
-
 class FakeLLM(BaseLLMAdapter):
     """脚本化适配器：按序弹出 responses，或用 behavior(i, request) 动态生成。"""
 
@@ -74,7 +69,6 @@ def make_manager(llm, results_dir=None) -> SubagentManager:
     return SubagentManager(
         llm,
         results_dir=results_dir,
-        approval_handler=deny_all,
     )
 
 
@@ -82,9 +76,11 @@ def make_manager(llm, results_dir=None) -> SubagentManager:
 
 def test_restricted_registry_snapshot():
     names = {t["name"] for t in build_restricted_registry().get_schemas()}
-    assert names == {"bash", "read_file", "read_notebook", "write_file", "edit_file", "execute_python"}
+    assert names == {"bash", "read_file", "read_notebook"}
 
     forbidden = {
+        # 写操作集中在 lead
+        "write_file", "edit_file", "execute_python",
         # team 协作（防递归 spawn / 越权任务板）
         "send_message", "read_inbox", "scan_tasks", "claim_task", "spawn_teammate",
         "list_teammates", "protocol_request", "protocol_response", "idle",
@@ -96,6 +92,15 @@ def test_restricted_registry_snapshot():
         "dispatch_subagent", "todo", "load_skill",
     }
     assert names.isdisjoint(forbidden)
+
+
+def test_restricted_registry_is_read_only():
+    registry = build_restricted_registry()
+    assert registry.execute("bash", {"command": "touch subagent_write_probe.txt"}).startswith("Permission Denied")
+    assert not (WORKSPACE / "subagent_write_probe.txt").exists()
+    assert not registry.execute("bash", {"command": "ls"}).startswith("Permission Denied")
+    assert not registry.execute("read_notebook", {"path": "missing.ipynb"}).startswith("Permission Denied")
+    assert registry.execute("write_file", {"path": "x.txt", "content": "x"}).startswith("Unknown tool")
 
 
 def test_dispatch_subagent_defaults_to_ask():
@@ -114,6 +119,27 @@ def test_default_registry_contains_subagent_tool(tmp_path):
     )
     names = {t["name"] for t in registry.get_schemas()}
     assert "dispatch_subagent" in names
+    assert "spawn_teammate" not in names
+
+
+def test_teammate_tools_opt_in(tmp_path, monkeypatch):
+    from rove.tools.tools_setup import build_default_registry
+
+    monkeypatch.setenv("ROVE_TEAMMATES", "1")
+    registry = build_default_registry(
+        skill_loader=SkillLoader(tmp_path / "skills"),
+        task_manager=TaskManager(tmp_path / "tasks"),
+        team_manager=TeammateManager(tmp_path / "team", None, FakeLLM()),
+    )
+    names = {t["name"] for t in registry.get_schemas()}
+    assert {"spawn_teammate", "send_message", "protocol_request"} <= names
+
+
+def test_team_prompt_follows_team_tools():
+    from rove.lead_agent import _build_system_prompt
+
+    assert "spawn_teammate" not in _build_system_prompt("")
+    assert "spawn_teammate" in _build_system_prompt("", team=True)
 
 
 # ---------- 同步派发与上下文隔离 ----------
@@ -253,7 +279,6 @@ def make_p1_manager(llm, tmp_path):
         results_dir=tmp_path / "results",
         bus=MessageBus(tmp_path / "inbox"),
         bg=BackGroundManager(),
-        approval_handler=deny_all,
     ), tmp_path
 
 

@@ -26,21 +26,22 @@ def build_default_registry(
         APPROVAL_MANAGER.request,
     )
 
+    # teammate 是实验功能，ROVE_TEAMMATES=1 时才开放；默认并行方式是 dispatch_subagent
+    team_tools = build_team_tools(team_manager, task_manager) if os.getenv("ROVE_TEAMMATES") == "1" else []
+
     registry.register_many([
         build_todo_tool(task_manager),
         execute_python_tool,
         *FILE_TOOLS,
-        *build_team_tools(team_manager, task_manager),
+        *team_tools,
         build_skill_tool(skill_loader),
         *build_memory_tools(),
         web_search_tool,
         run_bg_tool,
         check_bg_tool,
-        # 一次性子代理：复用 lead 的权限策略（模式切换同步生效），默认走 ASK 审批；
-        # 配置了 LLM_FAST_MODEL_ID 时默认用廉价模型
+        # 一次性只读子代理，默认走 ASK 审批；配置了 LLM_FAST_MODEL_ID 时默认用廉价模型
         build_subagent_tool(SubagentManager(
             team_manager.llm,
-            permission_policy=registry.permission_policy,
             fast_model_id=os.getenv("LLM_FAST_MODEL_ID"),
         )),
     ])

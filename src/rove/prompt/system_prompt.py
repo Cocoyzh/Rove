@@ -30,6 +30,7 @@ Rules:
 - Check background task results with check_background before proceeding.
 - Verify your changes — don't assume they work.
 - Prefer targeted edits over full file rewrites.
+- For broad read-only exploration (searching many files, mapping an unfamiliar subsystem), use dispatch_subagent: it returns only a condensed report. Make every edit yourself.
 - Stop once all tests pass and the task is complete.
 
 Memory:
@@ -38,7 +39,14 @@ Memory:
 - Use memory_store to persist durable knowledge for future sessions: project conventions and test commands (semantic), root causes and fixes you verified (episodic), user preferences (preference).
 - Use memory_recall when you suspect a past session already explored this problem — it is cheaper than re-exploring.
 
-Team:
+Available skills:
+{skill_loader.get_descriptions()}
+
+Call load_skill(name) to load a skill's full content.
+"""
+
+# 团队段只在 lead 注册了 teammate 工具时拼接（ROVE_TEAMMATES=1）
+TEAM_PROMPT = """Team:
 - Use spawn_teammate to create autonomous workers. Give them a clear role, not step-by-step instructions. Do NOT tell them to "wait for instructions" — they find work themselves.
 - Teammates have: scan_tasks, claim_task, bash, read_file, write_file, edit_file, send_message, idle, protocol_request, protocol_response.
 - Use todo to publish tasks to the shared board. Teammates will scan and claim them autonomously. Do not do their work for them — be patient.
@@ -46,9 +54,4 @@ Team:
 - Use protocol_request(type="shutdown", receiver=<name>) to ask a teammate to shut down.
 - Use protocol_request(type="plan_review", receiver=<name>) to request a plan review.
 - Check read_inbox regularly — teammates send progress reports and protocol responses there.
-
-Available skills:
-{skill_loader.get_descriptions()}
-
-Call load_skill(name) to load a skill's full content.
 """

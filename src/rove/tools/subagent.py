@@ -1,7 +1,7 @@
 """dispatch_subagent：一次性子代理。
 
 在独立上下文里跑有边界的子任务，只把浓缩报告回传 lead；
-子代理只有文件工具和 execute_python（不能派发、写记忆或联网）。
+子代理只读（bash 只放行只读命令、read_file、read_notebook），写操作集中在 lead。
 """
 
 import time
@@ -10,12 +10,11 @@ import uuid
 from pathlib import Path
 
 from rove.paths import TOOL_RESULTS_DIR, WORKSPACE_ROOT
-from rove.permissions import APPROVAL_MANAGER, PermissionPolicy
+from rove.permissions import ApprovalMode, PermissionPolicy
 from rove.llm import LLMRequest, LLMResponse
 from rove.llm_adapters import ADAPTER_FACTORY, BaseLLMAdapter, estimate_cost_usd
 from rove.messages import Message
 from rove.tools.background import BackGroundManager, bg_manager
-from rove.tools.execute_python import execute_python_tool
 from rove.tools.file_tools import FILE_TOOLS
 from rove.tools.message_bus import BUS, MessageBus
 from rove.tool_registry import Tool, ToolRegistry
@@ -33,7 +32,8 @@ SUBAGENT_SYSTEM_PROMPT = (
     "Work only from the briefing you receive.\n\n"
     "Rules:\n"
     "- Complete the objective efficiently; you have hard limits on turns and tokens.\n"
-    "- Prefer read-only exploration (bash/read_file) before modifying anything.\n"
+    "- You are read-only: explore with read_file, read_notebook and read-only bash commands. "
+    "Anything that writes is denied; leave all changes to the lead.\n"
     "- You have no messaging, memory, web or agent-spawning tools; do not ask for them.\n"
     "- When the objective is achieved, or you have gathered everything obtainable, "
     "stop calling tools and reply with your final report.\n\n"
@@ -47,16 +47,16 @@ SUBAGENT_SYSTEM_PROMPT = (
 )
 
 
-def build_restricted_registry(
-    permission_policy: PermissionPolicy = None,
-    approval_handler=None,
-) -> ToolRegistry:
-    """subagent 专用受限注册表：文件工具 + execute_python，别无其他。"""
+READ_ONLY_TOOLS = [t for t in FILE_TOOLS if t.name in ("bash", "read_file", "read_notebook")]
+
+
+def build_restricted_registry() -> ToolRegistry:
+    """subagent 专用只读注册表：STRICT 模式只放行只读 bash，其余审批一律拒绝。"""
     registry = ToolRegistry(
-        permission_policy or PermissionPolicy(WORKSPACE_ROOT),
-        approval_handler or APPROVAL_MANAGER.request,
+        PermissionPolicy(WORKSPACE_ROOT, ApprovalMode.STRICT),
+        lambda *args: False,
     )
-    registry.register_many([*FILE_TOOLS, execute_python_tool])
+    registry.register_many(READ_ONLY_TOOLS)
     return registry
 
 
@@ -66,8 +66,6 @@ class SubagentManager:
     def __init__(
         self,
         llm: BaseLLMAdapter,
-        permission_policy: PermissionPolicy = None,
-        approval_handler=None,
         results_dir: Path = TOOL_RESULTS_DIR,
         bus: MessageBus = BUS,
         bg: BackGroundManager = bg_manager,
@@ -76,8 +74,6 @@ class SubagentManager:
         adapter_factory=None,
     ):
         self._llm = llm
-        self._permission_policy = permission_policy
-        self._approval_handler = approval_handler
         self._results_dir = results_dir
         self._bus = bus
         self._bg = bg
@@ -175,7 +171,7 @@ class SubagentManager:
             done_event.set()
     def _execute(self, task_id, objective, context, max_turns, token_budget, model) -> str:
         llm = self._resolve_adapter(model)
-        registry = build_restricted_registry(self._permission_policy, self._approval_handler)
+        registry = build_restricted_registry()
         tools = registry.get_schemas()
         started = time.time()
 
@@ -329,8 +325,8 @@ def build_subagent_tool(manager: SubagentManager) -> Tool:
             "The subagent sees NOTHING from this session — only what you pass in. Briefing template for "
             "`context`: (1) relevant file paths (with hints where to look); (2) established facts and "
             "constraints; (3) exact acceptance criteria; (4) what NOT to touch. "
-            "Its tools: bash, read_file, read_notebook, write_file, edit_file, execute_python "
-            "(no team/memory/web tools). "
+            "Use it for read-only exploration: its only tools are bash (read-only commands), read_file "
+            "and read_notebook, so make every edit yourself. "
             "Report sections: 结论摘要 / 关键文件与证据 / 遇到的障碍 / usage statistics."
         ),
         input_schema={
