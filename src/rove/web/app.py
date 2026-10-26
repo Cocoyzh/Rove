@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR, SESSIONS_DIR, PROJECT_ROOT
 from rove.task_manager import TaskManager
 from rove.skill_loader import SkillLoader
-from rove.tools.agent_teams import TeammateManger
+from rove.tools.agent_teams import TeammateManager
 from rove.llm_adapters import AnthropicLLMAdapter
 from rove.web.session_manager import SessionManager
 from rove.web.websocket_handler import websocket_endpoint
@@ -53,7 +53,7 @@ def create_app() -> FastAPI:
         timeout=int(os.getenv("LLM_TIMEOUT", "60")),
         context_window=int(ctx_override) if ctx_override else None,
     )
-    team_manager = TeammateManger(TEAM_DIR, task_manager, llm)
+    team_manager = TeammateManager(TEAM_DIR, task_manager, llm)
 
     # 附加到 app.state 便于后续 WebSocket 和服务共享
     app.state.task_manager = task_manager
@@ -114,7 +114,7 @@ def create_app() -> FastAPI:
         if session_id:
             s_team_dir = TEAM_DIR / session_id
             if (s_team_dir / "config.json").exists():
-                tm = TeammateManger(s_team_dir, TaskManager(TASK_DIR / session_id), llm)
+                tm = TeammateManager(s_team_dir, TaskManager(TASK_DIR / session_id), llm)
                 config = tm.config
                 return {
                     "team_name": config.get("team_name", "default"),

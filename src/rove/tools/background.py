@@ -18,6 +18,30 @@ class BackGroundManager:
         thread.start()
         return f"Background task {task_id} started: {command[:80]}"
 
+    def register(self, task_id: str, command: str) -> None:
+        """外部任务（如后台 subagent）先行登记为 running，使 check_background 可见。"""
+        with self._lock:
+            self.tasks[task_id] = {"status": "running", "command": command, "result": None}
+
+    def set_progress(self, task_id: str, progress: str) -> None:
+        """更新运行中任务的进度心跳；未登记的任务静默忽略（同步 subagent 无 bg 记录）。"""
+        with self._lock:
+            if task_id in self.tasks:
+                self.tasks[task_id]["progress"] = progress
+
+    def notify(self, task_id: str, status: str, result: str, command: str = "") -> None:
+        """外部任务完成/失败时向通知管道投递结果，lead 下一步 drain_notifications 读到。"""
+        with self._lock:
+            task = self.tasks.setdefault(task_id, {"status": status, "command": command, "result": None})
+            task["status"] = status
+            task["result"] = result
+            self._notification_queue.append({
+                "task_id": task_id,
+                "status": status,
+                "result": result,
+                "command": command[:80],
+            })
+
     def _execute(self, task_id: str, command: str):
         try:
             s = subprocess.run(
@@ -48,11 +72,16 @@ class BackGroundManager:
             t = self.tasks.get(task_id)
             if not t:
                 return f"Error: Unknown task {task_id}"
-            return f"[{t['status']}] {t['command'][:80]}\n{t.get('result') or '(running)'}"
-        lines = [
-            f"[{tid}] [{t['status']}]: {t['command'][:80]}"
-            for tid, t in self.tasks.items()
-        ]
+            head = f"[{t['status']}] {t['command'][:80]}"
+            if t.get("progress"):
+                head += f"\nprogress: {t['progress']}"
+            return f"{head}\n{t.get('result') or '(running)'}"
+        lines = []
+        for tid, t in self.tasks.items():
+            line = f"[{tid}] [{t['status']}]: {t['command'][:80]}"
+            if t.get("progress") and t["status"] == "running":
+                line += f" · {t['progress']}"
+            lines.append(line)
         return "\n".join(lines) if lines else "No background tasks"
 
     def drain_notifications(self) -> list:

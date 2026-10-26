@@ -1,12 +1,13 @@
 import asyncio
 import json
+import os
 from typing import Dict, Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 from rich.console import Console
 
 from rove.paths import WORKSPACE_ROOT, TASK_DIR, TEAM_DIR
 from rove.task_manager import TaskManager
-from rove.tools.agent_teams import TeammateManger
+from rove.tools.agent_teams import TeammateManager
 from rove.permissions import PermissionPolicy, VALID_APPROVAL_MODES
 from rove.tool_registry import ToolRegistry
 from rove.tools.todo import build_todo_tool
@@ -20,6 +21,7 @@ from rove.tools.tools_setup import (
     build_team_tools,
     FILE_TOOLS,
 )
+from rove.tools.subagent import SubagentManager, build_subagent_tool
 from rove.web.web_approval import WebApprovalManager
 from rove.web.agent_runner import WebLeadAgent
 from rove.web.session_manager import message_to_dict
@@ -44,7 +46,7 @@ class SessionConnection:
 
         # 构建专属于此会话的 TaskManager 与 TeamManager（实现会话级任务看板与协同隔离）
         self.task_manager = TaskManager(TASK_DIR / self.session_id)
-        self.team_manager = TeammateManger(
+        self.team_manager = TeammateManager(
             TEAM_DIR / self.session_id,
             self.task_manager,
             self.app_state.llm,
@@ -56,16 +58,26 @@ class SessionConnection:
             self.permission_policy,
             self.approval_mgr.request,
         )
+        # 一次性子代理：进度/起止事件经 WebSocket 实时推给前端 TeamMonitor；
+        # 配置 LLM_FAST_MODEL_ID 时探索类子代理默认路由到廉价模型（P3）
+        self.subagent_manager = SubagentManager(
+            self.app_state.llm,
+            permission_policy=self.permission_policy,
+            approval_handler=self.approval_mgr.request,
+            on_event=self._on_subagent_event,
+            fast_model_id=os.getenv("LLM_FAST_MODEL_ID"),
+        )
         self.registry.register_many([
             build_todo_tool(self.task_manager),
             execute_python_tool,
             *FILE_TOOLS,
-            *build_team_tools(self.team_manager),
+            *build_team_tools(self.team_manager, self.task_manager),
             build_skill_tool(self.app_state.skill_loader),
             *build_memory_tools(),
             web_search_tool,
             run_bg_tool,
             check_bg_tool,
+            build_subagent_tool(self.subagent_manager),
         ])
 
         # 构建 WebLeadAgent 并挂载事件回调
@@ -149,6 +161,10 @@ class SessionConnection:
             "target_path": data.get("target_path", ""),
             "available_choices": data.get("available_choices", ["y", "s", "n"]),
         })
+
+    def _on_subagent_event(self, event: Dict[str, Any]) -> None:
+        """subagent 起止/每轮进度事件（自 subagent 工作线程调用，走线程安全发送队列）。"""
+        self._send_json_threadsafe(event)
 
     async def handle_chat(self, query: str) -> None:
         # 在独立线程中运行 agent.run，保证 WebSocket 异步接收事件不卡死

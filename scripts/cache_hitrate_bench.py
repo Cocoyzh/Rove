@@ -31,7 +31,7 @@ from rove.llm_adapters import AnthropicLLMAdapter  # noqa: E402
 from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR  # noqa: E402
 from rove.skill_loader import SkillLoader  # noqa: E402
 from rove.task_manager import TaskManager  # noqa: E402
-from rove.tools.agent_teams import TeammateManger  # noqa: E402
+from rove.tools.agent_teams import TeammateManager  # noqa: E402
 from rove.tools.tools_setup import build_default_registry  # noqa: E402
 
 # 固定任务脚本：模拟"读取文件并总结"的稳态多轮会话，逐轮在既有历史上追加。
@@ -135,7 +135,7 @@ def main() -> None:
     registry = build_default_registry(
         skill_loader=SkillLoader(SKILL_DIR),
         task_manager=TaskManager(TASK_DIR),
-        team_manager=TeammateManger(TEAM_DIR, TaskManager(TASK_DIR), llm),
+        team_manager=TeammateManager(TEAM_DIR, TaskManager(TASK_DIR), llm),
     )
     lead = LeadAgent(llm, registry, 50)
 

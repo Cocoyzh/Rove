@@ -4,7 +4,7 @@ from rove.skill_loader import SkillLoader
 from rove.task_manager import TaskManager
 from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR
 from rove.permissions import APPROVAL_MANAGER, VALID_APPROVAL_MODES
-from rove.tools.agent_teams import TeammateManger
+from rove.tools.agent_teams import TeammateManager
 from rich.console import Console
 from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
 from rove.usage_ledger import LEDGER
@@ -79,7 +79,7 @@ def main() -> None:
         context_window=int(ctx_override) if ctx_override else None,
     )
 
-    team_manager = TeammateManger(TEAM_DIR, task_manager, llm)
+    team_manager = TeammateManager(TEAM_DIR, task_manager, llm)
 
     registry = build_default_registry(
         skill_loader=skill_loader,
