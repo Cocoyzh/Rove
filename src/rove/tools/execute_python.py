@@ -1,12 +1,12 @@
 import subprocess
 import tempfile
 from pathlib import Path
-from ..tool_registry import Tool
+from ..tool_registry import Tool, ToolOutcome
 from rove.paths import WORKSPACE_ROOT
 
 
-def execute_python(code: str, timeout: int = 30, max_output_chars: int = 8000) -> str:
-    """Execute Python code in a subprocess and return stdout/stderr."""
+def execute_python(code: str, timeout: int = 30, max_output_chars: int = 8000) -> ToolOutcome:
+    """Execute Python code in a subprocess and return stdout/stderr；返回码非 0 即 is_error。"""
     if not code.strip():
         raise ValueError("code is required")
 
@@ -23,7 +23,7 @@ def execute_python(code: str, timeout: int = 30, max_output_chars: int = 8000) -
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            return f"Error: Python execution timeout after {timeout} seconds"
+            return ToolOutcome(f"Error: Python execution timeout after {timeout} seconds", True, "timeout")
 
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
@@ -37,7 +37,9 @@ def execute_python(code: str, timeout: int = 30, max_output_chars: int = 8000) -
         if len(output) > max_output_chars:
             output = output[:max_output_chars] + "\n\n... [output truncated]"
 
-        return output
+        if result.returncode != 0:
+            return ToolOutcome(output, True, "nonzero_exit")
+        return ToolOutcome(output)
 
 
 execute_python_tool = Tool(

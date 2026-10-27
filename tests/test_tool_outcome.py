@@ -39,3 +39,34 @@ def test_registry_level_errors_are_flagged(tmp_path):
 def test_execute_keeps_returning_plain_text(tmp_path):
     # subagent / teammate 依赖 execute() 返回字符串
     assert _registry(tmp_path, lambda **kw: "hi").execute("read_file", {"path": "a.txt"}) == "hi"
+
+
+# ---------- Codex review P2：子进程类工具按退出码判断成败 ----------
+
+def _shell_registry(tmp_path):
+    from rove.permissions import ApprovalMode
+    from rove.tools.execute_python import execute_python_tool
+    from rove.tools.file_tools import FILE_TOOLS
+    registry = ToolRegistry(PermissionPolicy(tmp_path, ApprovalMode.FULL_ACCESS), lambda *a, **k: True)
+    registry.register_many([t for t in FILE_TOOLS if t.name == "bash"] + [execute_python_tool])
+    return registry
+
+
+@pytest.mark.parametrize("command, is_error", [
+    ('python3 -c "1/0"', True),     # stderr 以 Traceback 开头：上一版只认 "Error:" 前缀，漏判成成功
+    ("false", True),                # 没有任何输出、退出码 1：文本里根本没有线索
+    ("echo Traceback is just text", False),
+])
+def test_bash_uses_exit_code(tmp_path, command, is_error):
+    outcome = _shell_registry(tmp_path).run("bash", {"command": command})
+    assert outcome.is_error is is_error
+    if is_error:
+        assert outcome.error_kind == "nonzero_exit"
+        assert "[exit code" in outcome.content   # 退出码也交给模型
+
+
+def test_execute_python_uses_return_code(tmp_path):
+    registry = _shell_registry(tmp_path)
+    failed = registry.run("execute_python", {"code": "1/0"})
+    assert failed.is_error and failed.error_kind == "nonzero_exit"
+    assert not registry.run("execute_python", {"code": "print('ok')"}).is_error

@@ -3,7 +3,7 @@ import json
 import os
 import re
 import subprocess
-from ..tool_registry import Tool
+from ..tool_registry import Tool, ToolOutcome
 from rove.paths import WORKSPACE_ROOT, AGENT_TMP_DIR
 from rove.security.command_classifier import CommandClassifier
 
@@ -22,9 +22,14 @@ def _safe_path(p: str) -> Path:
     return path
 
 def _run_bash(command: str, timeout: int = None) -> str:
+    return bash_outcome(command, timeout).content
+
+
+def bash_outcome(command: str, timeout: int = None) -> ToolOutcome:
+    """执行 bash 并带上成败：退出码非 0 即 is_error（输出文本本身判断不出命令是否失败）。"""
     dangerous = ["rm -rf /", "sudo", "shutdown", "reboot"]
     if any(d in command for d in dangerous):
-        return "Error: Dangerous command blocked."
+        return ToolOutcome("Error: Dangerous command blocked.", True, "tool_reported")
 
     is_safe, _ = _bash_classifier.classify(command)
     if is_safe:
@@ -50,11 +55,14 @@ def _run_bash(command: str, timeout: int = None) -> str:
             env=env,
         )
         output = (s.stdout + s.stderr).strip()
-        return output[:50000] if output else f"(no output)"
+        output = output[:50000] if output else "(no output)"
+        if s.returncode != 0:
+            return ToolOutcome(f"{output}\n[exit code {s.returncode}]", True, "nonzero_exit")
+        return ToolOutcome(output)
     except subprocess.TimeoutExpired:
-        return f"Error: Timeout expired({effective}s)."
+        return ToolOutcome(f"Error: Timeout expired({effective}s).", True, "timeout")
     except Exception as e:
-        return f"Error: {e}"
+        return ToolOutcome(f"Error: {e}", True, "exception")
 
 def _run_read(path: str, limit: int = None) -> str:
     try:
@@ -233,7 +241,7 @@ FILE_TOOLS = [
             },
             "required": ["command"],
         },
-        handler= lambda **kw: _run_bash(kw["command"], kw.get("timeout"))
+        handler= lambda **kw: bash_outcome(kw["command"], kw.get("timeout"))
     ),
     Tool(
         name="read_file",

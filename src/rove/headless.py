@@ -23,6 +23,7 @@ from rove.paths import SKILL_DIR, TASK_DIR, TEAM_DIR, WORKSPACE_ROOT
 from rove.permissions import VALID_APPROVAL_MODES
 from rove.skill_loader import SkillLoader
 from rove.task_manager import TaskManager
+from rove.tools import background
 from rove.tools.agent_teams import TeammateManager
 from rove.tools.tools_setup import build_default_registry
 
@@ -123,6 +124,10 @@ def _build_agent(args: argparse.Namespace, observer: JsonlObserver) -> LeadAgent
     missing = [k for k in ("LLM_MODEL_ID", "LLM_API_KEY") if not os.getenv(k)]
     if missing:
         raise ConfigError(f"缺少环境变量: {', '.join(missing)}")
+    if os.getenv("ROVE_TEAMMATES") == "1":
+        # teammate 的注册表写死了交互审批和 workspace 模式（agent_teams._teammate_registry），
+        # 既会调 input()，又不继承 --approval-mode。接通之前 fail closed。
+        raise ConfigError("headless 暂不支持 ROVE_TEAMMATES=1：teammate 不继承非交互审批与 --approval-mode")
 
     ctx_override = os.getenv("LLM_CONTEXT_WINDOW")
     llm = AnthropicLLMAdapter(
@@ -159,9 +164,12 @@ def execute(build_agent, prompt: str, observer: JsonlObserver, **started_info: A
         if reason == "crashed":
             err_console.print_exception()
     finally:
+        # 先清理后台子进程，再宣布结束：否则平台以为已取消，旧进程却还在改工作区
+        background_terminated = background.bg_manager.shutdown()
         exit_code = EXIT_CODES[reason]
         observer.on_run_finished(reason, exit_code, detail,
                                  final_text=final_text,
+                                 background_terminated=background_terminated,
                                  duration_ms=int((time.monotonic() - started) * 1000))
     return exit_code
 

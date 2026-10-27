@@ -83,9 +83,13 @@ class ToolRegistry:
                                    True, "approval_denied")
 
         try:
-            output = str(tool.handler(**arguments))
+            result = tool.handler(**arguments)
         except Exception as e:
             return ToolOutcome(f"Error: {e}", True, "exception")
+        if isinstance(result, ToolOutcome):
+            # handler 自己知道成败（如子进程退出码），直接透传，不再从文本推断
+            return result
+        output = str(result)
         if output.startswith(_TOOL_ERROR_PREFIX):
             return ToolOutcome(output, True, "tool_reported")
         return ToolOutcome(output)

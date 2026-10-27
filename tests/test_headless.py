@@ -5,6 +5,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import anthropic
@@ -187,3 +188,43 @@ def test_cli_sigterm_emits_cancelled_and_exits_143(tmp_path):
     events = [json.loads(line) for line in out.splitlines()]
     assert events[-1]["type"] == "run_finished"
     assert events[-1]["reason"] == "cancelled"
+
+
+# ---------- Codex review P2：teammate 不继承非交互审批 → headless 拒绝启动 ----------
+
+def test_headless_refuses_teammates(monkeypatch):
+    import argparse
+    from rove.headless import _build_agent
+    monkeypatch.setenv("LLM_MODEL_ID", "m")
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("ROVE_TEAMMATES", "1")
+    buf = io.StringIO()
+    obs = JsonlObserver(buf)
+    args = argparse.Namespace(approval_mode="strict", max_steps=5)
+    assert execute(lambda: _build_agent(args, obs), "go", obs) == EXIT_CODES["config_error"]
+    assert "ROVE_TEAMMATES" in _events(buf)[-1]["detail"]
+
+
+# ---------- Codex review P1：先清理后台子进程，再发 run_finished ----------
+
+def test_background_processes_are_stopped_before_run_finished(monkeypatch):
+    from rove.tools import background
+    bg = background.BackGroundManager()
+    monkeypatch.setattr(background, "bg_manager", bg)
+    buf = io.StringIO()
+    obs = JsonlObserver(buf)
+    procs = []
+
+    def build():
+        bg.run("exec sleep 30")
+        for _ in range(50):                       # 等后台线程把进程登记上
+            if bg._procs:
+                break
+            time.sleep(0.05)
+        procs.extend(bg._procs.values())
+        raise Terminated()
+
+    assert execute(build, "go", obs) == 143
+    last = _events(buf)[-1]
+    assert (last["reason"], last["background_terminated"]) == ("cancelled", 1)
+    assert procs and procs[0].poll() is not None   # 发 run_finished 时进程已经退出了
