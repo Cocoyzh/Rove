@@ -9,8 +9,8 @@ import time
 from pathlib import Path
 
 import anthropic
-import httpx
 import pytest
+from types import SimpleNamespace
 
 from rove.headless import EXIT_CODES, Terminated, classify_exception, deny_approval, execute
 from rove.lead_agent import LeadAgent
@@ -22,6 +22,14 @@ from rove.tool_registry import Tool, ToolRegistry
 from test_observers import ScriptedLLM
 
 SRC = Path(__file__).resolve().parents[1] / "src"
+
+# anthropic 的异常只读取 request / status_code / headers 这几个属性。
+# 用假对象构造，不直接依赖 httpx：anthropic 2.x 换成了 httpx2，CI 里根本没装 httpx。
+_REQUEST = SimpleNamespace(method="POST", url="http://x")
+
+
+def _response(status: int) -> SimpleNamespace:
+    return SimpleNamespace(status_code=status, headers={}, request=_REQUEST)
 
 
 # ---------- 进程内：execute 的收尾逻辑 ----------
@@ -66,7 +74,7 @@ def test_execute_brackets_run_with_started_and_finished(tmp_path, isolated_bus, 
 
 @pytest.mark.parametrize("exc, reason", [
     (Terminated(), "cancelled"),
-    (anthropic.AuthenticationError("bad key", response=httpx.Response(401, request=httpx.Request("POST", "http://x")), body=None), "auth_failed"),
+    (anthropic.AuthenticationError("bad key", response=_response(401), body=None), "auth_failed"),
     (RuntimeError("bug"), "crashed"),
 ])
 def test_execute_still_emits_run_finished_when_run_raises(exc, reason):
@@ -111,8 +119,8 @@ def test_permission_denied_is_reported_as_error(tmp_path, isolated_bus):
 
 
 @pytest.mark.parametrize("exc, reason", [
-    (anthropic.APITimeoutError(request=httpx.Request("POST", "http://x")), "llm_timeout"),
-    (anthropic.APIConnectionError(request=httpx.Request("POST", "http://x")), "llm_unavailable"),
+    (anthropic.APITimeoutError(request=_REQUEST), "llm_timeout"),
+    (anthropic.APIConnectionError(request=_REQUEST), "llm_unavailable"),
 ])
 def test_timeout_is_classified_before_its_parent_class(exc, reason):
     # APITimeoutError 是 APIConnectionError 的子类：判断顺序反了就会全部变成 llm_unavailable
@@ -124,7 +132,7 @@ def test_timeout_is_classified_before_its_parent_class(exc, reason):
     (500, "llm_unavailable"), (529, "llm_unavailable"), (404, "bad_request"),
 ])
 def test_status_codes_map_to_reason(status, reason):
-    resp = httpx.Response(status, request=httpx.Request("POST", "http://x"))
+    resp = _response(status)
     exc = anthropic.APIStatusError("x", response=resp, body=None)
     assert classify_exception(exc)[0] == reason
 
