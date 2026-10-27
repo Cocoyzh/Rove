@@ -9,6 +9,7 @@ from rich.console import Console
 from rove.llm_adapters import AnthropicLLMAdapter, BaseLLMAdapter
 import readline
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -44,6 +45,10 @@ def show_status(lead: LeadAgent, llm: BaseLLMAdapter) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "run":
+        from rove.headless import main as run_main
+        sys.exit(run_main(sys.argv[2:]))
+
     skill_loader = SkillLoader(SKILL_DIR)
     task_manager = TaskManager(TASK_DIR)
 
@@ -100,8 +105,10 @@ def main() -> None:
             policy.set_approval_mode(mode)
             console.print(f"[cyan]✦ 权限模式已切换[/cyan] {mode.value}")
             continue
-        answer = lead.run(query)
-        if not (answer and answer.strip()):
+        result = lead.run(query)
+        if not result.ok:
+            console.print(f"[red]✗ {result.reason}[/red] [dim]{result.detail}[/dim]")
+        elif not result.content.strip():
             console.print("[dim](empty response)[/dim]")
 
 if __name__ == "__main__":

@@ -133,7 +133,8 @@ def test_lead_agent_reminder_backoff_end_to_end(tmp_path):
     lead = LeadAgent(llm, registry, max_steps=10)
 
     result = lead.run("Start working")
-    assert result == "All done"
+    assert result.content == "All done"
+    assert result.reason == "completed"
 
     # 检查所有注入的消息中的 reminder
     reminders = [m.content for m in lead.messages if m.role == "user" and "<reminder>" in (m.content or "")]

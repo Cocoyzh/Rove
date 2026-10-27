@@ -2,6 +2,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, Callable, List, Optional
 from rove.permissions import PermissionDecision, PermissionPolicy
 
+@dataclass(frozen=True)
+class ToolOutcome:
+    """一次工具调用的结果。is_error 由产生错误的地方直接标记，而不是事后按文本前缀猜。
+
+    error_kind: unknown_tool / no_handler / permission_denied / approval_denied / exception / tool_reported
+    """
+    content: str
+    is_error: bool = False
+    error_kind: Optional[str] = None
+
+
+# 工具 handler 约定用 "Error: ..." 报告自身失败（超时、参数缺失等）
+_TOOL_ERROR_PREFIX = "Error:"
+
+
 @dataclass
 class Tool:
     name: str
@@ -45,24 +60,32 @@ class ToolRegistry:
         ]
 
     def execute(self, name: str, arguments: Dict[str, Any]) -> str:
+        """只要文本结果的调用方（subagent、teammate）用这个；需要 is_error 的用 run()。"""
+        return self.run(name, arguments).content
+
+    def run(self, name: str, arguments: Dict[str, Any]) -> ToolOutcome:
         tool = self._tools.get(name)
 
         if tool is None:
-            return f"Unknown tool: {name}"
+            return ToolOutcome(f"Unknown tool: {name}", True, "unknown_tool")
         if tool.handler is None:
-            return f"Error: tool {name} has no handler registered."
+            return ToolOutcome(f"Error: tool {name} has no handler registered.", True, "no_handler")
 
         decision, reason = self._permission_policy.decide(tool_name=name, arguments=arguments)
 
         if decision is PermissionDecision.DENY:
-            return f"Permission Denied: {reason}"
+            return ToolOutcome(f"Permission Denied: {reason}", True, "permission_denied")
 
         if decision is PermissionDecision.ASK:
             approved = self._approval_handler(name, arguments, reason)
             if not approved:
-                return f"Permission Denied: User rejected {name}"
+                return ToolOutcome(f"Permission Denied: {name} requires approval and was not granted ({reason})",
+                                   True, "approval_denied")
 
         try:
-            return str(tool.handler(**arguments))
+            output = str(tool.handler(**arguments))
         except Exception as e:
-            return f"Error: {e}"
+            return ToolOutcome(f"Error: {e}", True, "exception")
+        if output.startswith(_TOOL_ERROR_PREFIX):
+            return ToolOutcome(output, True, "tool_reported")
+        return ToolOutcome(output)

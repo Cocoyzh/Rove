@@ -1,6 +1,7 @@
 import json
 import time
-from typing import List
+from dataclasses import dataclass
+from typing import List, Literal
 from rich.console import Console
 from rove.tool_registry import ToolRegistry
 from rove.prompt.system_prompt import SYSTEM_PROMPT, TEAM_PROMPT
@@ -11,8 +12,31 @@ from rove.tools.background import bg_manager
 from rove.llm import LLMResponse, LLMRequest
 from rove.llm_adapters import BaseLLMAdapter
 from rove.messages import Message
+from rove.observers import RunObserver, RichObserver
 
 console = Console()
+err_console = Console(stderr=True)
+
+StopKind = Literal["completed", "max_steps", "max_tokens", "refusal", "unexpected_stop"]
+
+# LLM 的 stop_reason → run 的结束原因；不在表里的一律算 unexpected_stop（fail closed）
+_STOP_REASONS: dict[str, StopKind] = {
+    "end_turn": "completed",
+    "max_tokens": "max_tokens",
+    "refusal": "refusal",
+}
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """一次 run 正常返回时的结果。抛异常的情况（超时、鉴权失败等）由调用方分类。"""
+    content: str
+    reason: StopKind
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.reason == "completed"
 
 
 def _store_l4_summary(summary: str) -> None:
@@ -30,8 +54,10 @@ def _build_system_prompt(query: str, team: bool = False) -> str:
 
 
 class LeadAgent:
-    def __init__(self, llm: BaseLLMAdapter, registry: ToolRegistry, max_steps: int = 50):
+    def __init__(self, llm: BaseLLMAdapter, registry: ToolRegistry, max_steps: int = 50,
+                 observer: RunObserver | None = None):
         self.llm = llm
+        self.observer = observer or RichObserver(console)
         self.registry = registry
         self.max_steps = max_steps
         self.messages: List[Message] = []
@@ -61,11 +87,7 @@ class LeadAgent:
             return
         self.messages[:] = compact_history(self.llm, self.messages, on_summary=_store_l4_summary)
 
-    @staticmethod
-    def _stream_text(text: str) -> None:
-        console.print(text, end="", markup=False, highlight=False)
-
-    def run(self, query: str) -> str:
+    def run(self, query: str) -> RunResult:
         self.messages.append(Message(role="user", content=query))
 
         rounds_since_todo = 0   # 记录多少轮没使用Todo Manager
@@ -94,9 +116,8 @@ class LeadAgent:
                     request = LLMRequest(messages=self.messages, tools=self.tools,
                                          max_tokens=8000,
                                          system_prompt=_build_system_prompt(query if step == 0 else "", self.team))
-                    response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
-                    if response.content:
-                        console.print()
+                    response: LLMResponse = self.llm.stream(request, on_text=self.observer.on_text_delta)
+                    self.observer.on_assistant_message(response.content)
                     if response.usage:
                         total_input_tokens += response.usage.input_tokens
                         total_output_tokens += response.usage.output_tokens
@@ -104,7 +125,7 @@ class LeadAgent:
                 except Exception as e:
                     if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) \
                             and reactive_retries < MAX_REACTIVE_RETRIES:
-                        console.print("[bold yellow]⚠ 上下文溢出，触发应急压缩[/bold yellow]")
+                        self.observer.on_compaction()
                         self.messages[:] = reactive_compact(self.llm, self.messages)
                         reactive_retries += 1
                         continue  # 重试当前 step
@@ -115,26 +136,23 @@ class LeadAgent:
                                              tool_calls=response.tool_calls))
 
                 if response.stop_reason != "tool_use":
-                    return response.content
+                    reason = _STOP_REASONS.get(response.stop_reason, "unexpected_stop")
+                    detail = "" if reason == "completed" else f"stop_reason={response.stop_reason}"
+                    if reason == "unexpected_stop":
+                        err_console.print(f"[yellow]⚠ 未知的 stop_reason={response.stop_reason!r}，按失败处理[/yellow]")
+                    return RunResult(response.content, reason, detail)
 
                 used_todo = False
 
                 for tool in response.tool_calls:
-                    console.print(f"[bold yellow]▸ {tool.tool_name}[/bold yellow] [dim cyan]{tool.tool_args}[/dim cyan]")
+                    self.observer.on_tool_call(tool)
 
-                    output = self.registry.execute(tool.tool_name, tool.tool_args)
-
-                    is_error = str(output).strip().lower().startswith(("error", "exception", "traceback"))
-                    label = "error" if is_error else "output"
-                    color = "red" if is_error else "green"
-                    preview = str(output)[:500]
-                    if len(str(output)) > 500:
-                        preview += " ..."
-                    console.print(f"[{color}]  {label}:[/{color}] {preview}")
+                    outcome = self.registry.run(tool.tool_name, tool.tool_args)
+                    self.observer.on_tool_result(tool, outcome.content, outcome.is_error, outcome.error_kind)
 
                     self.messages.append(Message(role="tool",
                                                  tool_call_id=tool.tool_id,
-                                                 content=str(output)))
+                                                 content=outcome.content))
 
                     if tool.tool_name == "todo":
                         used_todo = True
@@ -153,6 +171,6 @@ class LeadAgent:
                         ))
                         reminder_cooldown = 6
 
-            return "Error: max_steps exceeded before the agent finished."
+            return RunResult("", "max_steps", f"max_steps={self.max_steps} exceeded before the agent finished")
         finally:
-            console.print(f"[dim]⚡ In: {total_input_tokens} · Out: {total_output_tokens}[/dim]")
+            self.observer.on_usage(total_input_tokens, total_output_tokens)

@@ -1,3 +1,4 @@
+from typing import Any, Callable, Dict
 import os
 
 from rove.tool_registry import ToolRegistry
@@ -19,11 +20,13 @@ from rove.paths import WORKSPACE_ROOT
 def build_default_registry(
     skill_loader: SkillLoader,
     task_manager: TaskManager,
-    team_manager: TeammateManager
+    team_manager: TeammateManager,
+    approval_handler: Callable[[str, Dict[str, Any], str], bool] | None = None,
 ) -> ToolRegistry:
+    """approval_handler 默认走 REPL 的交互审批；headless 传一个不读 stdin 的实现。"""
     registry = ToolRegistry(
         PermissionPolicy(WORKSPACE_ROOT),
-        APPROVAL_MANAGER.request,
+        approval_handler or APPROVAL_MANAGER.request,
     )
 
     # teammate 是实验功能，ROVE_TEAMMATES=1 时才开放；默认并行方式是 dispatch_subagent
