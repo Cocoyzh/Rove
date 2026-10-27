@@ -6,10 +6,12 @@ from typing import Any
 from rove.tool_registry import Tool
 from rove.tools.message_bus import BUS
 
-VALID_PROTOCOL_TYPES = ["shutdown", "plan_review"]
+VALID_PROTOCOL_TYPES = ["shutdown", "plan_review", "cancel"]
 PROTOCOL_RULES = {
     "shutdown": {"initiators": {"lead"}},
     "plan_review": {"initiators": set()},
+    # 取消协议：lead 中止某个 teammate，teammate 收尾退出并先发总结
+    "cancel": {"initiators": {"lead"}},
 }
 
 @dataclass
@@ -102,6 +104,11 @@ def _handle_protocol_request(sender: str, **kw) -> str:
 def _handle_protocol_response(sender: str, **kw) -> str:
     """BUS.send 胶水 + PROTOCOL 纯状态调用"""
     state = PROTOCOL.respond(kw["request_id"], sender, kw["approve"], kw.get("response_payload"))
+    return _send_protocol_response(state, sender)
+
+
+def _send_protocol_response(state: ProtocolState, responder: str) -> str:
+    """把协议响应写回发起方收件箱（工具路径与 teammate 取消处理共用）。"""
     response_content = (
         state.response_payload.get("content")
         or state.response_payload.get("feedback")
@@ -109,10 +116,10 @@ def _handle_protocol_response(sender: str, **kw) -> str:
         or state.status
     )
     BUS.send(
-        sender, state.sender, str(response_content),
+        responder, state.sender, str(response_content),
         extra={
             "type": "protocol_response",
-            "request_id": kw["request_id"],
+            "request_id": state.request_id,
             "protocol_type": state.protocol_type,
             "status": state.status,
             "response_payload": state.response_payload,
@@ -121,12 +128,20 @@ def _handle_protocol_response(sender: str, **kw) -> str:
     return f"Protocol {state.request_id} {state.status}"
 
 
+def respond_and_send(responder: str, request_id: str, approve: bool,
+                     response_payload: dict | None = None) -> ProtocolState:
+    """非 LLM 路径（如 teammate 循环自动应答 cancel）直接完成协议响应并投递。"""
+    state = PROTOCOL.respond(request_id, responder, approve, response_payload)
+    _send_protocol_response(state, responder)
+    return state
+
+
 def build_protocol_tools(sender: str) -> list[Tool]:
     return [
         Tool(
             name="protocol_request",
             description="Initiate a structured protocol that requires the receiver's explicit approval before any action. "
-                        "--e.g., shutdown, plan-review",
+                        "--e.g., shutdown, plan-review, cancel (abort a teammate's current work)",
             input_schema={
                 "type": "object",
                 "properties": {

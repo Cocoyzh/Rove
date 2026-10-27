@@ -4,7 +4,8 @@ from pathlib import Path
 import threading
 from rove.paths import INBOX_DIR
 
-VALID_MSG_TYPES = ["message", "broadcast"]
+# progress：subagent 每轮向 lead 写的轻量心跳
+VALID_MSG_TYPES = ["message", "broadcast", "progress"]
 
 class MessageBus:
     def __init__(self, inbox_dir: Path):

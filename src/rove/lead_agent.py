@@ -1,9 +1,11 @@
 import json
+import time
 from typing import List
 from rich.console import Console
 from rove.tool_registry import ToolRegistry
-from rove.prompt.system_prompt import SYSTEM_PROMPT
+from rove.prompt.system_prompt import SYSTEM_PROMPT, TEAM_PROMPT
 from rove.compaction.compaction_layers import run_pipeline, reactive_compact, MAX_REACTIVE_RETRIES, compact_history
+from rove.memory import MEMORY
 from rove.tools.message_bus import BUS
 from rove.tools.background import bg_manager
 from rove.llm import LLMResponse, LLMRequest
@@ -13,6 +15,20 @@ from rove.messages import Message
 console = Console()
 
 
+def _store_l4_summary(summary: str) -> None:
+    """L4/应急压缩的摘要沉淀进长期记忆（Issue #4：压缩与记忆联动）。"""
+    MEMORY.long_term.store("episodic", f"summary_{int(time.time())}", summary[:2000])
+
+
+def _build_system_prompt(query: str, team: bool = False) -> str:
+    """System Prompt = 核心指令（+ 团队段）+ 记忆块（工作记忆 + 长期记忆检索）。"""
+    prompt = f"{SYSTEM_PROMPT}\n{TEAM_PROMPT}" if team else SYSTEM_PROMPT
+    memory_block = MEMORY.build_system_context(query)
+    if memory_block:
+        return f"{prompt}\n\n{memory_block}"
+    return prompt
+
+
 class LeadAgent:
     def __init__(self, llm: BaseLLMAdapter, registry: ToolRegistry, max_steps: int = 50):
         self.llm = llm
@@ -20,11 +36,13 @@ class LeadAgent:
         self.max_steps = max_steps
         self.messages: List[Message] = []
         self.tools = registry.get_schemas()
+        self.team = any(t["name"] == "spawn_teammate" for t in self.tools)
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
 
     def reset(self) -> None:
-        """清空对话历史，开始新会话。"""
+        """清空对话历史，开始新会话。工作记忆快照归档进长期记忆（轻量反思）。"""
+        MEMORY.archive_working_memory()
         self.messages = []
         self._conv_start_input = self.llm.total_input_tokens
         self._conv_start_output = self.llm.total_output_tokens
@@ -41,7 +59,7 @@ class LeadAgent:
         if not self.messages:
             console.print("[dim]没有可压缩的对话[/dim]")
             return
-        self.messages[:] = compact_history(self.llm, self.messages)
+        self.messages[:] = compact_history(self.llm, self.messages, on_summary=_store_l4_summary)
 
     @staticmethod
     def _stream_text(text: str) -> None:
@@ -51,6 +69,7 @@ class LeadAgent:
         self.messages.append(Message(role="user", content=query))
 
         rounds_since_todo = 0   # 记录多少轮没使用Todo Manager
+        reminder_cooldown = 0   # 提醒退避冷却计数
         reactive_retries = 0    # 应急压缩重试计数
         total_input_tokens = 0
         total_output_tokens = 0
@@ -69,11 +88,12 @@ class LeadAgent:
                     self.messages.append(Message(role="user",
                                                  content=f"<background-results>\n{notif_text}\n</background-results>"))
 
-                run_pipeline(self.llm, self.messages)
+                run_pipeline(self.llm, self.messages, on_summary=_store_l4_summary)
 
                 try:
                     request = LLMRequest(messages=self.messages, tools=self.tools,
-                                         max_tokens=8000, system_prompt=SYSTEM_PROMPT)
+                                         max_tokens=8000,
+                                         system_prompt=_build_system_prompt(query if step == 0 else "", self.team))
                     response: LLMResponse = self.llm.stream(request, on_text=self._stream_text)
                     if response.content:
                         console.print()
@@ -119,11 +139,19 @@ class LeadAgent:
                     if tool.tool_name == "todo":
                         used_todo = True
 
-                rounds_since_todo = 0 if used_todo else rounds_since_todo + 1
-
-                if rounds_since_todo >= 3:
-                    self.messages.append(Message(role="user",
-                                                 content="<reminder>Update your todos before continuing.</reminder>"))
+                if used_todo:
+                    rounds_since_todo = 0
+                    reminder_cooldown = 0
+                else:
+                    rounds_since_todo += 1
+                    if reminder_cooldown > 0:
+                        reminder_cooldown -= 1
+                    elif rounds_since_todo >= 4:
+                        self.messages.append(Message(
+                            role="user",
+                            content="<reminder>If your plan has evolved or the current subtask is completed, please update your todos. Otherwise continue your work.</reminder>"
+                        ))
+                        reminder_cooldown = 6
 
             return "Error: max_steps exceeded before the agent finished."
         finally:

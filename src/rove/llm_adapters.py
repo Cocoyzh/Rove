@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional, Callable
+import os
+import threading
+import time
 from rove.llm import LLMResponse, LLMRequest, Usage
 from rove.messages import Message, ToolCall
-import time
 
 CONTEXT_WINDOWS = {
     "claude-opus-5": 1_000_000,
@@ -10,6 +12,10 @@ CONTEXT_WINDOWS = {
     "claude-haiku-4-5": 200_000,
 }
 DEFAULT_CONTEXT_WINDOW = 1_000_000
+
+# 思考模型耗尽输出 Token 时的兜底文本前缀（_build_response），
+# 供下游（如 L4 摘要）识别"拿到的是思维链碎片而非正式产出"
+THINKING_FALLBACK_MARKER = "*(思考中已达Token上限)*"
 
 class BaseLLMAdapter(ABC):
     def __init__(self, model: str, api_key: str, base_url: Optional[str], timeout: Optional[int],
@@ -23,6 +29,8 @@ class BaseLLMAdapter(ABC):
         self.total_output_tokens = 0
         self.call_count = 0
         self.last_input_tokens = 0
+        self.last_output_tokens = 0
+        self.cjk_token_ratio = 1.3
         self.context_window = context_window or CONTEXT_WINDOWS.get(self.model, DEFAULT_CONTEXT_WINDOW)
 
     def _record_usage(self, response: LLMResponse) -> LLMResponse:
@@ -31,6 +39,21 @@ class BaseLLMAdapter(ABC):
             self.total_output_tokens += response.usage.output_tokens
             self.call_count += 1
             self.last_input_tokens = response.usage.input_tokens
+            self.last_output_tokens = response.usage.output_tokens
+
+            content = response.content or ""
+            c_len = len(content)
+            # 校准仅取纯文本响应：tool_use 的 JSON 结构开销与思考 token
+            # 同样计入 output_tokens，混入会把 observed 比例系统性抬高
+            if c_len > 0 and not response.tool_calls and response.usage.output_tokens > 0:
+                b_len = len(content.encode("utf-8", errors="ignore"))
+                non_ascii = (b_len - c_len) // 2
+                if non_ascii >= 20:
+                    ascii_chars = c_len - non_ascii
+                    remaining = response.usage.output_tokens - (ascii_chars / 3.8)
+                    if remaining > 0:
+                        observed = max(0.5, min(2.5, remaining / non_ascii))
+                        self.cjk_token_ratio = round(self.cjk_token_ratio * 0.5 + observed * 0.5, 3)
         return response
 
     @abstractmethod
@@ -62,7 +85,14 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
         result: List[dict] = []
         for msg in messages:
             if msg.role == "user":
-                result.append({"role": "user", "content": msg.content})
+                last = result[-1] if result else None
+                if last is not None and last["role"] == "user":
+                    if isinstance(last["content"], str):
+                        last["content"] = f"{last['content']}\n\n{msg.content or ''}"
+                    elif isinstance(last["content"], list):
+                        last["content"].append({"type": "text", "text": msg.content or ""})
+                else:
+                    result.append({"role": "user", "content": msg.content})
             elif msg.role == "assistant":
                 blocks: list = []
                 if msg.content:
@@ -74,15 +104,19 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
                         "name": tc.tool_name,
                         "input": tc.tool_args,
                     })
+                if not blocks:
+                    blocks.append({"type": "text", "text": "(empty)"})
                 result.append({"role": "assistant", "content": blocks})
             else:  # role == "tool"
                 block = {"type": "tool_result",
                          "tool_use_id": msg.tool_call_id,
                          "content": msg.content}
                 last = result[-1] if result else None
-                if (last is not None and last["role"] == "user"
-                        and isinstance(last["content"], list)):
-                    last["content"].append(block)
+                if last is not None and last["role"] == "user":
+                    if isinstance(last["content"], list):
+                        last["content"].append(block)
+                    else:
+                        last["content"] = [{"type": "text", "text": last["content"]}, block]
                 else:
                     result.append({"role": "user", "content": [block]})
         return result
@@ -95,7 +129,6 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
         for block in message.content:
             if block.type == "text":
                 contents.append(block.text)
-
             elif block.type == "tool_use":
                 tool_id = block.id
                 tool_name = block.name
@@ -104,10 +137,20 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
                                            tool_name=tool_name,
                                            tool_args=tool_args))
         text = "\n".join(contents)
+        if not text and not tool_calls:
+            # 兼容仅有思考块或耗尽输出 Token 的场景
+            for block in message.content:
+                if getattr(block, "type", "") == "thinking" and getattr(block, "thinking", ""):
+                    text = f"{THINKING_FALLBACK_MARKER}: {block.thinking[:200]}..."
+                    break
         usage = None
         if hasattr(message, "usage"):
-            usage = Usage(input_tokens=message.usage.input_tokens,
-                          output_tokens=message.usage.output_tokens)
+            cache_read = getattr(message.usage, "cache_read_input_tokens", 0) or 0
+            cache_creation = getattr(message.usage, "cache_creation_input_tokens", 0) or 0
+            raw_input = getattr(message.usage, "input_tokens", 0) or 0
+            total_input = raw_input + cache_read + cache_creation
+            usage = Usage(input_tokens=total_input,
+                          output_tokens=getattr(message.usage, "output_tokens", 0) or 0)
         return LLMResponse(
             content=text,
             tool_calls=tool_calls,
@@ -156,3 +199,59 @@ class AnthropicLLMAdapter(BaseLLMAdapter):
         latency_ms = int((end_time - start_time) * 1000)
 
         return self._record_usage(self._build_response(message=final, latency_ms=latency_ms))
+
+
+# ==================== 模型路由 ====================
+
+class AdapterFactory:
+    """按 model id 缓存适配器实例：同 id 复用同一 adapter（及其懒加载 client），
+    供 dispatch_subagent 等旁路任务按需取用不同模型，避免重复建连。"""
+
+    def __init__(self):
+        self._adapters: dict[str, BaseLLMAdapter] = {}
+        self._lock = threading.Lock()
+
+    def get(self, model_id: str) -> BaseLLMAdapter:
+        with self._lock:
+            adapter = self._adapters.get(model_id)
+            if adapter is None:
+                adapter = self.build(model_id)
+                self._adapters[model_id] = adapter
+            return adapter
+
+    @staticmethod
+    def build(model_id: str) -> "AnthropicLLMAdapter":
+        return AnthropicLLMAdapter(
+            model=model_id,
+            api_key=os.getenv("LLM_API_KEY", ""),
+            base_url=os.getenv("LLM_BASE_URL"),
+            timeout=int(os.getenv("LLM_TIMEOUT", "60")),
+        )
+
+    @staticmethod
+    def resolve(role: str) -> str:
+        """角色名 → 具体 model id：main=LLM_MODEL_ID；
+        fast=LLM_FAST_MODEL_ID（未配置回落主模型，保证行为与现在一致）。"""
+        main = os.getenv("LLM_MODEL_ID", "claude-sonnet-5")
+        if role == "fast":
+            return os.getenv("LLM_FAST_MODEL_ID") or main
+        return role if role and role != "main" else main
+
+
+ADAPTER_FACTORY = AdapterFactory()
+
+
+# ==================== 成本核算 ====================
+
+# 每百万 token 单价（USD）：(input, output)，未知模型按 DEFAULT_PRICING 估算。
+MODEL_PRICING = {
+    "claude-opus-5": (15.0, 75.0),
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-haiku-4-5": (0.8, 4.0),
+}
+DEFAULT_PRICING = (3.0, 15.0)
+
+
+def estimate_cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    in_price, out_price = MODEL_PRICING.get(model_id, DEFAULT_PRICING)
+    return round((input_tokens * in_price + output_tokens * out_price) / 1_000_000, 6)

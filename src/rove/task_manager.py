@@ -15,7 +15,7 @@ import threading
 class TaskManager:
     def __init__(self, task_dir):
         self.dir = task_dir
-        self.dir.mkdir(exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
         self._next_id = self._max_id() + 1
         self._claim_lock = threading.Lock()
 
@@ -55,6 +55,57 @@ class TaskManager:
                 task["blockedBy"].remove(completed_id)
                 self._save(task)
 
+    def sync_todos(self, items: list[dict]) -> list[dict]:
+        """将 todo 传入的任务项以智能 Upsert 方式同步至持久化 .tasks/task_<id>.json。
+        保留已有任务的 owner、blockedBy 等字段，兼容多 Agent 协同。
+        """
+        self.dir.mkdir(parents=True, exist_ok=True)
+        synced_tasks = []
+
+        for i, item in enumerate(items):
+            raw_id = item.get("id")
+            try:
+                task_id = int(raw_id)
+            except (ValueError, TypeError):
+                task_id = i + 1
+
+            subject = str(item.get("text") or item.get("subject", f"Task {task_id}")).strip()
+            status = str(item.get("status", "pending")).lower()
+            if status not in ["pending", "in_progress", "completed"]:
+                status = "pending"
+
+            path = self.dir / f"task_{task_id}.json"
+            if path.exists():
+                try:
+                    task = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    task = {}
+                task["id"] = task_id
+                task["subject"] = subject
+                task["status"] = status
+                task.setdefault("description", "")
+                task.setdefault("blockedBy", [])
+                task.setdefault("owner", item.get("owner", ""))
+            else:
+                task = {
+                    "id": task_id,
+                    "subject": subject,
+                    "description": item.get("description", ""),
+                    "status": status,
+                    "blockedBy": item.get("blockedBy", []),
+                    "owner": item.get("owner", ""),
+                }
+
+            if status == "completed":
+                self._clear_dependency(task_id)
+
+            self._save(task)
+            synced_tasks.append(task)
+
+            if task_id >= self._next_id:
+                self._next_id = task_id + 1
+
+        return synced_tasks
 
     def update(self, task_id: int, status: str = None, add_blocked_by: list = None,
                remove_blocked_by: list = None) -> str:
@@ -72,14 +123,22 @@ class TaskManager:
         self._save(task)
         return json.dumps(task, indent=2, ensure_ascii=False)
 
-    def list_all(self) -> str:
+    def get_all_tasks(self) -> list[dict]:
+        self.dir.mkdir(parents=True, exist_ok=True)
         tasks = []
         files = sorted(
             self.dir.glob("task_*.json"),
             key=lambda f: int(f.stem.split("_")[1])
         )
         for f in files:
-            tasks.append(json.loads(f.read_text()))
+            try:
+                tasks.append(json.loads(f.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+        return tasks
+
+    def list_all(self) -> str:
+        tasks = self.get_all_tasks()
         if not tasks:
             return "No tasks."
         lines = []
@@ -90,7 +149,7 @@ class TaskManager:
         return "\n".join(lines)
 
     def scan_unclaimed_tasks(self) -> list:
-        self.dir.mkdir(exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)
         unclaimed = []
         for f in self.dir.glob("task_*.json"):
             task = json.loads(f.read_text())
@@ -117,3 +176,19 @@ class TaskManager:
             task["status"] = "in_progress"
             path.write_text(json.dumps(task, indent=2))
         return f"Claimed Task #{task_id} for {owner}."
+
+    def reclaim(self, owner: str) -> str:
+        """回收某个 owner（通常为 crashed teammate）名下所有进行中任务：
+        重置为 pending 且清空 owner，使其可被其他成员重新认领。"""
+        reclaimed_ids = []
+        with self._claim_lock:
+            for f in self.dir.glob("task_*.json"):
+                task = json.loads(f.read_text())
+                if task.get("owner") == owner and task.get("status") == "in_progress":
+                    task["owner"] = ""
+                    task["status"] = "pending"
+                    f.write_text(json.dumps(task, indent=2, ensure_ascii=False))
+                    reclaimed_ids.append(task["id"])
+        if not reclaimed_ids:
+            return f"No in-progress tasks owned by {owner}."
+        return f"Reclaimed {len(reclaimed_ids)} task(s) from {owner}: {reclaimed_ids}"

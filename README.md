@@ -1,10 +1,16 @@
+<div align="center">
+
+<img src="assets/logo/logo.svg" width="150" alt="Rove logo" />
+
 # Rove
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![LLM Anthropic](https://img.shields.io/badge/LLM-Anthropic-191919)
 ![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-4C1)
 
-Rove 是一个运行在终端中的多智能体编码框架。它由 Lead Agent 负责任务规划、工具调用和结果验证，并可按需派生后台 Teammate 并行处理子任务。
+</div>
+
+Rove 是一个运行在终端中的多智能体编码框架。它由 Lead Agent 负责任务规划、工具调用和结果验证，并可派生只读子代理并行探索，或按需启用后台 Teammate。
 
 项目内置权限门控、任务协作、异步消息和长上下文管理。任务状态与运行数据保存在本地文件系统中，无需额外部署数据库或消息队列。
 
@@ -13,7 +19,8 @@ Rove 是一个运行在终端中的多智能体编码框架。它由 Lead Agent 
 ### Agent 协作
 
 - Lead Agent 负责任务拆分、工具编排和最终响应。
-- Teammate 在独立后台线程中运行，并使用受限工具集处理子任务。
+- 一次性只读子代理（`dispatch_subagent`）在独立上下文里探索，只回传结论；写操作集中在 Lead。
+- Teammate 在独立后台线程中运行，并使用受限工具集处理子任务（实验功能，设置 `ROVE_TEAMMATES=1` 开启）。
 - 文件化任务看板支持任务创建、扫描、原子认领和状态更新。
 - 异步消息总线用于 Lead 与 Teammate 之间的持久化通信。
 - `shutdown`、`plan_review` 等结构化协议支持显式确认或拒绝。
